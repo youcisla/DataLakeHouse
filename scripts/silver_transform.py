@@ -2,7 +2,8 @@
 """
 silver_transform.py : job Spark « Bronze vers Silver » (DataLake Météo).
 =======================================================================
-Lit les données Bronze (NOAA en CSV + Open-Meteo en JSON) sur HDFS, les
+Lit les données Bronze (archives Météo-France en CSV ';' gzippé, NOAA en
+CSV, Open-Meteo en JSON) sur HDFS, les
 normalise vers un schéma Silver unifié, calcule des indicateurs de fenêtre
 (moyennes mobiles, écart-type, anomalie) puis écrit le résultat en Parquet
 partitionné par dt, compressé Zstd niveau 22.
@@ -22,6 +23,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import sys
 from functools import reduce
 from typing import List, Optional, Tuple
@@ -68,6 +70,19 @@ NOAA_REQUIRED_COLUMNS: List[str] = [
     "STATION", "NAME", "LATITUDE", "LONGITUDE", "ELEVATION",
     "DATE", "PRCP", "TMAX", "TMIN", "TAVG", "SNOW", "AWND",
 ]
+
+#: Colonnes obligatoires du CSV Météo-France (jeu QUOT « RR-T-Vent »).
+#: Source : https://meteo.data.gouv.fr (données climatologiques quotidiennes).
+METEOFRANCE_REQUIRED_COLUMNS: List[str] = [
+    "NUM_POSTE", "NOM_USUEL", "LAT", "LON", "ALTI", "AAAAMMJJ",
+    "RR", "TN", "TX",
+]
+
+#: Colonnes Météo-France facultatives (absentes de certains millésimes).
+METEOFRANCE_OPTIONAL_COLUMNS: List[str] = ["TM", "FFM", "NEIGETOT"]
+
+#: Séparateur de colonnes des CSV Météo-France.
+METEOFRANCE_SEPARATOR = ";"
 
 #: Colonnes obligatoires du JSON Open-Meteo.
 OPENMETEO_REQUIRED_COLUMNS: List[str] = [
@@ -130,6 +145,134 @@ def validate_required_columns(columns: List[str], required: List[str]) -> List[s
     """Retourne la liste des colonnes required absentes de columns."""
     present = set(columns)
     return [col for col in required if col not in present]
+
+
+def mf_parse_number(value) -> Optional[float]:
+    """
+    Convertit une valeur numérique Météo-France en float.
+
+    Les fichiers QUOT laissent les mesures manquantes **vides** ; certains
+    exports utilisent la virgule décimale. Retourne None si non convertible.
+
+    Exemples :
+        "12.4"  -> 12.4        "12,4" -> 12.4
+        ""      -> None        "   "  -> None        None -> None
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        result = float(value)
+        return None if result != result else result  # écarte NaN
+    text = str(value).strip()
+    if not text:
+        return None
+    text = text.replace(",", ".")
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def mf_parse_date(value) -> Optional[str]:
+    """
+    Convertit la date Météo-France ``AAAAMMJJ`` en ``YYYY-MM-DD``.
+
+    Exemples :
+        "20250115" -> "2025-01-15"      20250115 -> "2025-01-15"
+        "2025-01-15" -> "2025-01-15"    ""/None/"2025" -> None
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if len(text) == 10 and text[4] == "-" and text[7] == "-":
+        text = text.replace("-", "")
+    if len(text) != 8 or not text.isdigit():
+        return None
+    year, month, day = int(text[:4]), int(text[4:6]), int(text[6:])
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return None
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
+
+def mf_station_id(num_poste) -> str:
+    """
+    Identifiant Silver d'un poste Météo-France : ``MF_`` + NUM_POSTE sur 8.
+
+    Exemples :
+        "75114001" -> "MF_75114001"       7511 -> "MF_00007511"
+    """
+    if num_poste is None:
+        return ""
+    text = str(num_poste).strip()
+    if not text:
+        return ""
+    if text.isdigit():
+        text = text.zfill(8)
+    return f"MF_{text}"
+
+
+def mf_city_name(nom_usuel) -> str:
+    """
+    Déduit la ville depuis le nom usuel du poste Météo-France.
+
+    Le nom usuel est en majuscules et suffixé par le site de la station
+    (« PARIS-MONTSOURIS », « LYON-BRON »). On conserve le premier segment,
+    en casse de titre, ce qui aligne les archives sur les villes du flux
+    temps réel Open-Meteo et rend les agrégats Gold comparables.
+
+    Exemples :
+        "PARIS-MONTSOURIS"      -> "Paris"
+        "BORDEAUX-MERIGNAC"     -> "Bordeaux"
+        "LILLE LESQUIN"         -> "Lille"
+        "SAINT-BRIEUC"          -> "Saint-Brieuc"  (préfixe conservé)
+        ""                      -> ""
+    """
+    if not nom_usuel:
+        return ""
+    text = " ".join(str(nom_usuel).split()).strip()
+    if not text:
+        return ""
+    # Les préfixes composés (SAINT-, SAINTE-, LE-, LA-, LES-) ne sont pas des
+    # séparateurs de site : on ne coupe qu'après eux.
+    prefixes = ("SAINT", "SAINTE", "ST", "STE", "LE", "LA", "LES")
+    # re.split avec groupe capturant : les séparateurs d'origine sont conservés
+    # (« LE HAVRE » -> « Le Havre », « SAINT-BRIEUC » -> « Saint-Brieuc »).
+    tokens = re.split(r"([-\s])", text.upper())
+    words = tokens[0::2]
+    separators = tokens[1::2]
+    kept = [words[0]]
+    used_separators: List[str] = []
+    index = 1
+    while index < len(words) and kept[-1] in prefixes:
+        used_separators.append(separators[index - 1])
+        kept.append(words[index])
+        index += 1
+    result = kept[0].capitalize()
+    for separator, word in zip(used_separators, kept[1:]):
+        result += ("-" if separator == "-" else " ") + word.capitalize()
+    return result
+
+
+def mf_mean_temperature(tm, tn, tx) -> Optional[float]:
+    """
+    Température moyenne journalière Météo-France.
+
+    Utilise ``TM`` lorsqu'elle est renseignée, sinon la demi-somme
+    ``(TN + TX) / 2``, sinon la seule valeur disponible, sinon None.
+    """
+    mean = mf_parse_number(tm)
+    if mean is not None:
+        return round(mean, 2)
+    low, high = mf_parse_number(tn), mf_parse_number(tx)
+    if low is not None and high is not None:
+        return round((low + high) / 2.0, 2)
+    if low is not None:
+        return round(low, 2)
+    if high is not None:
+        return round(high, 2)
+    return None
 
 
 def dedup_keys() -> List[str]:
@@ -203,6 +346,29 @@ def read_noaa(spark: "SparkSession") -> Optional["DataFrame"]:
         return None
 
 
+def read_meteofrance(spark: "SparkSession") -> Optional["DataFrame"]:
+    """
+    Lit les archives Météo-France du Bronze (CSV ';' gzippés, lecture brute).
+
+    Spark décompresse le gzip de façon transparente ; les colonnes sont lues
+    en texte puis converties explicitement, car les mesures manquantes sont
+    des champs vides et non des sentinelles numériques.
+    """
+    path = f"{hdfs_base()}/bronze/meteo/batch/source=meteofrance/year=*/month=*/*.csv.gz"
+    logger.info("Lecture Météo-France : %s", path)
+    try:
+        return (
+            spark.read
+            .option("header", "true")
+            .option("sep", METEOFRANCE_SEPARATOR)
+            .option("inferSchema", "false")
+            .csv(path)
+        )
+    except Exception as exc:  # chemin inexistant / répertoire vide
+        logger.warning("Lecture Météo-France impossible (%s) : %s", path, exc)
+        return None
+
+
 def read_openmeteo(spark: "SparkSession") -> Optional["DataFrame"]:
     """Lit les JSON Open-Meteo du Bronze (lignes JSON par heure)."""
     path = f"{hdfs_base()}/bronze/meteo/stream/source=openmeteo/year=*/month=*/day=*/hour=*/*.json"
@@ -270,6 +436,53 @@ def transform_noaa(noaa_df: "DataFrame") -> "DataFrame":
     )
 
 
+def transform_meteofrance(mf_df: "DataFrame") -> "DataFrame":
+    """
+    Mappe le CSV Météo-France (QUOT RR-T-Vent) vers le schéma Silver unifié.
+
+    - validation stricte des colonnes obligatoires (échec explicite sinon) ;
+    - conversion des champs vides en NULL (``mf_parse_number``) ;
+    - température = TM si disponible, sinon (TN + TX) / 2 ;
+    - la neige (NEIGETOT) n'est présente que dans le jeu « autres paramètres » :
+      elle est lue si la colonne existe, sinon NULL.
+    """
+    from pyspark.sql import functions as F
+    from pyspark.sql.types import DoubleType, StringType
+
+    missing = validate_required_columns(mf_df.columns, METEOFRANCE_REQUIRED_COLUMNS)
+    if missing:
+        raise ValueError(f"Colonnes Météo-France manquantes : {missing}")
+
+    num_udf = F.udf(mf_parse_number, DoubleType())
+    date_udf = F.udf(mf_parse_date, StringType())
+    station_udf = F.udf(mf_station_id, StringType())
+    city_udf = F.udf(mf_city_name, StringType())
+    mean_udf = F.udf(mf_mean_temperature, DoubleType())
+
+    def _optional(column: str):
+        """Colonne facultative : NULL typé si absente du millésime lu."""
+        return F.col(column) if column in mf_df.columns else F.lit(None).cast(StringType())
+
+    return (
+        mf_df
+        .withColumn("station_id", station_udf(F.col("NUM_POSTE")))
+        .withColumn("station_name", F.col("NOM_USUEL"))
+        .withColumn("city", city_udf(F.col("NOM_USUEL")))
+        .withColumn("country", F.lit("FR"))
+        .withColumn("latitude", num_udf(F.col("LAT")))
+        .withColumn("longitude", num_udf(F.col("LON")))
+        .withColumn("elevation", num_udf(F.col("ALTI")))
+        .withColumn("temperature", mean_udf(_optional("TM"), F.col("TN"), F.col("TX")))
+        .withColumn("precipitation", num_udf(F.col("RR")))
+        .withColumn("wind_speed", num_udf(_optional("FFM")))
+        .withColumn("snow", num_udf(_optional("NEIGETOT")))
+        .withColumn("timestamp", F.to_timestamp(date_udf(F.col("AAAAMMJJ")), "yyyy-MM-dd"))
+        .withColumn("dt", F.to_date(F.col("timestamp")))
+        .withColumn("source", F.lit("METEOFRANCE"))
+        .select(*SILVER_SCHEMA)
+    )
+
+
 def transform_openmeteo(om_df: "DataFrame") -> "DataFrame":
     """Mappe les JSON Open-Meteo vers le schéma Silver unifié."""
     from pyspark.sql import functions as F
@@ -326,12 +539,18 @@ def transform_to_silver(spark: "SparkSession", start_date: str, end_date: str) -
     from pyspark.sql import DataFrame
     from pyspark.sql import functions as F
 
+    mf_df = read_meteofrance(spark)
     noaa_df = read_noaa(spark)
     om_df = read_openmeteo(spark)
 
     frames: List["DataFrame"] = []
+    # Source batch principale : archives Météo-France (meteo.data.gouv.fr).
+    if mf_df is not None:
+        frames.append(transform_meteofrance(mf_df))
+    # Source batch historique (conservée : NOAA GHCN-D, facultative).
     if noaa_df is not None:
         frames.append(transform_noaa(noaa_df))
+    # Source temps réel : Open-Meteo via Kafka.
     if om_df is not None:
         frames.append(transform_openmeteo(om_df))
 

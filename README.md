@@ -1,8 +1,9 @@
 # 🌤️ Projet DataLake Météo, TP Big Data (DataLake / DataLakehouse)
 
 > **Thème : Météo & analyse climatique**. Un datalake **Bronze → Silver → Gold**
-> persistant sur **HDFS**, ingérant deux sources hétérogènes (une **batch** : NOAA GHCN-D,
-> une **temps réel** : Open-Meteo via Kafka + Spark Structured Streaming),
+> persistant sur **HDFS**, ingérant deux sources hétérogènes (une **batch** : archives
+> quotidiennes **Météo-France** de `meteo.data.gouv.fr`, une **temps réel** : **Open-Meteo**
+> via Kafka + Spark Structured Streaming),
 > orchestré par **Airflow**, avec **ML (XGBoost)**, **IA générative (Ollama)**
 > et **dashboard Streamlit**.
 
@@ -18,7 +19,8 @@ Concevoir et implémenter un datalake en architecture Bronze → Silver → Gold
    Kafka → consommé en continu par **Spark Structured Streaming** → écrit en **Bronze**),
    les archives batch étant déposées en Bronze avec un **marqueur d'idempotence `_SUCCESS`** ;
 2. **Persiste et transforme** chaque couche sur HDFS (Silver = validation, déduplication,
-   normalisation, Parquet Zstd ; Gold = agrégations/KPIs métier), **sans aucune étape manuelle** ;
+   normalisation, Parquet Zstd ; Gold = agrégations/KPIs métier), **sans aucune étape manuelle**
+   (`make all` va des tests au Gold vérifié en une commande) ;
 3. **Orchestre** le tout avec **Airflow** : un DAG par couche, dépendances explicites,
    et un DAG interrompu **relançable sans dupliquer** les données ;
 4. **Restitue** via un dashboard Streamlit **et** un notebook Jupyter (lecture directe
@@ -34,7 +36,7 @@ Concevoir et implémenter un datalake en architecture Bronze → Silver → Gold
                     ┌───────────────────────────────┐
                     │        SOURCES HÉTÉROGÈNES      │
                     └──────────────┬────────────────┘
-                BATCH (NOAA GHCN-D)│        TEMPS RÉEL (Open-Meteo API)
+          BATCH (Météo-France QUOT)│        TEMPS RÉEL (Open-Meteo API)
         ┌──────────────────────────┘        ┌───────────────────────────┐
         │                                   │ kafka_producer.py          │
         │                                   │ (toutes les 5 min, 5 villes)│
@@ -42,8 +44,9 @@ Concevoir et implémenter un datalake en architecture Bronze → Silver → Gold
         ▼                                                ▼
 ┌───────────────────────┐                    ┌───────────────────────┐
 │ /bronze/meteo/batch   │                    │   Kafka topic         │
-│ source=noaa/year=..   │                    │   "meteo-stream"      │
-│ (CSV bruts + _SUCCESS)│                    └───────────┬───────────┘
+│ source=meteofrance/   │                    │   "meteo-stream"      │
+│   year=YYYY/month=MM  │                    └───────────┬───────────┘
+│ (.csv.gz bruts+_SUCCESS)                                │
 └───────────┬───────────┘                                │
             │                          ┌─────────────────▼──────────────┐
             │                          │ streaming_ingest.py            │
@@ -64,8 +67,8 @@ Concevoir et implémenter un datalake en architecture Bronze → Silver → Gold
                                    ▼  dag_gold_aggregate (Airflow)
 ┌──────────────────────────────────────────────────────────────────────┐
 │  GOLD  /gold/meteo/                                                  │
-│  daily_aggregates · weekly_trends · extreme_events · ml_predictions  │
-│  ai_insights (bulletins LLM)                                         │
+│  daily_aggregates · weekly_trends · extreme_events · climate_profile │
+│  ml_predictions · ai_insights (bulletins LLM)                        │
 └──────────┬───────────────────────────────────────────────────────────┘
            ▼
    Dashboard Streamlit (8501) · Jupyter (8888) · notebooks/
@@ -93,6 +96,54 @@ Concevoir et implémenter un datalake en architecture Bronze → Silver → Gold
 ---
 
 ## 3. Démarrage rapide
+
+### Tout, en une commande
+
+```bash
+make all
+```
+
+`make all` enchaîne **sans aucune étape manuelle** :
+
+| # | Étape | Cible | Ce qu'elle fait |
+|---|---|---|---|
+| 1 | Qualité | `test` | 36 tests unitaires (sans Spark ni HDFS) ; installe `pytest`/`pandas` si absents |
+| 2 | Pré-vol | `check-docker` | Vérifie Docker + `docker compose` v2 + démon actif, avec message explicite |
+| 3 | Cluster | `up` | `docker compose up -d --build`, puis attend le Namenode HDFS **et** le webserver Airflow |
+| 4 | Init | `init` | Crée `/bronze` `/silver` `/gold` `/models` `/checkpoints`, le topic Kafka, l'admin Airflow |
+| 5 | DAGs | `unpause` | Active les quatre DAGs |
+| 6 | Pipeline | `trigger` | Déclenche `dag_bronze_ingest`, qui enchaîne Silver puis Gold |
+| 7 | Attente | `wait-pipeline` | Sonde l'état des trois DAGs jusqu'au succès (échoue vite si un DAG casse) |
+| 8 | Contrôle | `verify` | `verify_medallion.py` : les trois couches existent, sont marquées `_SUCCESS` et non vides |
+| 9 | Sortie | `urls` | Rappelle les interfaces |
+
+Toute étape en échec arrête `make all` avec un code de sortie non nul :
+un « succès » silencieux sur un datalake vide est impossible.
+
+```bash
+make help                       # liste toutes les cibles
+make all PROFILE=genai          # + Ollama (bulletins IA)
+make all MF_DEPARTMENTS="75 69" # restreint les départements ingérés
+make re                         # reset complet (volumes compris) puis rejoue tout
+```
+
+### Cibles utiles
+
+```bash
+make test          # tests unitaires seuls (aucun Docker requis)
+make lint          # compilation + pyflakes
+make dry-run       # plan d'ingestion Météo-France, hors ligne
+make bronze        # rejoue une couche isolément (idempotent)
+make silver
+make gold
+make ml            # bonus : réentraînement XGBoost
+make verify        # re-contrôle l'état des trois couches sur HDFS
+make status        # état des conteneurs
+make logs SVC=kafka-producer
+make stop | down | reset | clean
+```
+
+### Ou manuellement, étape par étape
 
 ```bash
 # 1) Lancer le cluster complet (build des images, initialisation HDFS/Kafka/Airflow)
@@ -125,23 +176,37 @@ Autres commandes : `./deploy.sh status` · `./deploy.sh logs kafka-producer` ·
 
 ## 4. Sources de données
 
-### 4.1 Batch : NOAA GHCN-D (~6,6 Go visés)
+### 4.1 Batch : archives Météo-France (meteo.data.gouv.fr)
 
-- **URL** : https://www.ncei.noaa.gov/data/global-historical-climatology-network-daily/access/
-- **Format** : CSV par station (100 000+ stations mondiales), valeurs journalières
-  (températures, précipitations, neige, vent).
-- **Période ciblée** : 2022–2025 (les fichiers de stations contiennent l'historique
-  complet ; la fenêtre temporelle est appliquée en **Silver** lors de la normalisation).
-- **Schéma CSV** : `STATION, DATE, LATITUDE, LONGITUDE, ELEVATION, NAME, PRCP, TMAX,
-  TMIN, TAVG, SNOW, SNWD, AWND`.
-- ⚠️ **Unités NOAA** : les valeurs sont en **dixièmes** d'unité (TMAX=220 → 22,0 °C)
-  et les valeurs manquantes valent **-9999** (9999 pour SNOW/SNWD). La conversion
-  (÷10) est faite en Silver.
-- **Ingestion** : `scripts/batch_ingest.py` énumère le portail, sélectionne les
-  stations par taille décroissante jusqu'à atteindre `NOAA_TARGET_GB` (6,6 Go),
-  télécharge avec reprise, et dépose les fichiers **bruts** en Bronze.
-- **Mode `--synthetic`** : si NOAA est inaccessible (réseau filtré), le script
-  génère des CSV au même schéma (marche aléatoire saisonnière), utile pour une démo rapide.
+- **Portail** : https://meteo.data.gouv.fr — jeu **« Données climatologiques de base -
+  quotidiennes »**, exploré par les notebooks
+  [loicduffar/meteo.data-Tools](https://github.com/loicduffar/meteo.data-Tools).
+- **Fichiers** : un CSV gzippé **par département** et par période, variables
+  **RR-T-Vent** (précipitations, températures, vent) :
+
+```
+{MF_BASE_URL}/Q_{DEP}_previous-1950-2024_RR-T-Vent.csv.gz    # historique
+{MF_BASE_URL}/Q_{DEP}_latest-2025-2026_RR-T-Vent.csv.gz      # période courante
+MF_BASE_URL = https://meteofrance.s3.sbg.io.cloud.ovh.net/data/synchro_ftp/BASE/QUOT
+```
+
+- **Schéma CSV** (séparateur `;`) : `NUM_POSTE ; NOM_USUEL ; LAT ; LON ; ALTI ;
+  AAAAMMJJ ; RR ; QRR ; TN ; QTN ; TX ; QTX ; TM ; QTM ; FFM ; QFFM` (les colonnes
+  `Qxxx` sont les codes qualité, conservées telles quelles en Bronze).
+- ⚠️ **Valeurs manquantes** : ce sont des **champs vides**, pas des sentinelles
+  numériques ; les unités sont déjà en °C / mm / m·s⁻¹ (aucune division par 10).
+  La conversion « vide → NULL » est faite en Silver (`mf_parse_number`).
+- **Départements ingérés** (`MF_DEPARTMENTS`) : `75 69 13 33 59`, soit ceux des cinq
+  villes suivies en temps réel par Open-Meteo — les deux sources se recoupent donc
+  dans les agrégats Gold. La fenêtre `MF_START_YEAR`/`MF_END_YEAR` sélectionne les
+  périodes de fichiers à télécharger ; le filtrage fin des dates a lieu en Silver.
+- **Ingestion** : `scripts/meteofrance_ingest.py` construit le plan (département ×
+  période), télécharge avec reprise et dépose les fichiers **bruts** en Bronze.
+- **Mode `--synthetic`** : si `meteo.data.gouv.fr` est inaccessible (réseau filtré),
+  le script génère des `.csv.gz` au **schéma identique** (sinusoïde saisonnière
+  bruitée, ~2 % de relevés incomplets), pour une démo de bout en bout.
+- **Source historique facultative** : `scripts/batch_ingest.py` (NOAA GHCN-D) reste
+  disponible et alimente `source=noaa/` ; la couche Silver sait lire les deux.
 
 ### 4.2 Temps réel : Open-Meteo API
 
@@ -165,13 +230,13 @@ Autres commandes : `./deploy.sh status` · `./deploy.sh logs kafka-producer` ·
 
 | Flux | Chemin HDFS | Marqueur |
 |---|---|---|
-| Batch NOAA | `/bronze/meteo/batch/source=noaa/year=YYYY/month=MM/` | `_SUCCESS` + `manifest.json` |
+| Batch Météo-France | `/bronze/meteo/batch/source=meteofrance/year=YYYY/month=MM/` | `_SUCCESS` + `manifest.json` + `_ingested.json` |
 | Stream Open-Meteo | `/bronze/meteo/stream/source=openmeteo/year=YYYY/month=MM/day=DD/hour=HH/` | `_SUCCESS` par heure |
 
 - Convention de partitionnement **`source=X/year=YYYY/month=MM`** (exigence du sujet).
   Pour le batch, `YYYY-MM` est **l'année/mois du lot d'ingestion** : chaque fichier
-  de station est stocké **une seule fois** (aucune duplication d'octets) et la liste
-  des stations déjà ingérées est conservée dans `_ingested.json`.
+  départemental est stocké **une seule fois** (aucune duplication d'octets) et la liste
+  des lots déjà ingérés (clés `DEP:période`) est conservée dans `_ingested.json`.
 - **Quota** : le script de monitoring `hdfs_utils.quota_reached('/bronze', quota)`
   arrête automatiquement le producteur Kafka lorsque le Bronze atteint
   **`BRONZE_QUOTA_GB` (10,5 Go par défaut)** ; le DAG Bronze saute alors le streaming.
@@ -182,10 +247,14 @@ Autres commandes : `./deploy.sh status` · `./deploy.sh logs kafka-producer` ·
 
 `scripts/silver_transform.py` (DAG `dag_silver_transform`) :
 
-1. **Lecture** des partitions Bronze marquées `_SUCCESS` (CSV NOAA + JSON Open-Meteo) ;
-2. **Validation du schéma** (colonnes obligatoires, sinon échec explicite) ;
+1. **Lecture** des partitions Bronze marquées `_SUCCESS` (CSV `;` gzippés
+   Météo-France, CSV NOAA facultatifs, JSON Open-Meteo) ;
+2. **Validation du schéma** (colonnes obligatoires, sinon échec explicite :
+   `METEOFRANCE_REQUIRED_COLUMNS`, `OPENMETEO_REQUIRED_COLUMNS`) ;
 3. **Déduplication** sur `(station_id, timestamp)` ;
-4. **Normalisation** vers le schéma unifié :
+4. **Normalisation** vers le schéma unifié (`station_id = MF_<NUM_POSTE>`,
+   `city` déduite de `NOM_USUEL` pour recouper les villes Open-Meteo,
+   `temperature = TM` sinon `(TN + TX) / 2`) :
 
 ```
 station_id, station_name, city, country, latitude, longitude, elevation,
@@ -206,6 +275,7 @@ timestamp, temperature, precipitation, wind_speed, snow, source, dt
 | `daily_aggregates` | T° moy/min/max, précip, vent, neige, écart-type par ville et jour | `dt=` |
 | `weekly_trends` | Moyennes hebdo, pente de tendance, écart vs semaine précédente | `year=,week=` |
 | `extreme_events` | Canicule, fortes pluies, vents violents, vague de froid (seuils configurables) | `dt=` |
+| `climate_profile` | **Profil météo** mensuel par ville : normales de T°, amplitude thermique, cumul de pluie moyen, jours de pluie, vent, saison | `month=` |
 | `ml_predictions` | Prédictions J+1 vs réalité, erreur, confiance, version du modèle | `dt=` |
 | `ai_insights` | Bulletins météo générés par LLM | `dt=` |
 
@@ -218,7 +288,7 @@ Un DAG interrompu **peut être relancé sans dupliquer** :
 | Mécanisme | Où | Pourquoi c'est sûr |
 |---|---|---|
 | Marqueur `_SUCCESS` | chaque répertoire Bronze (batch + heure stream) | l'ingestion ne re-traite jamais un lot déjà complet |
-| `_ingested.json` | `/bronze/.../source=noaa/` | une station n'est jamais téléversée deux fois |
+| `_ingested.json` | `/bronze/.../source=meteofrance/` | un lot (département × période) n'est jamais téléversé deux fois |
 | **Checkpoint Kafka** | `/checkpoints/kafka_to_bronze` | le streaming reprend aux offsets exacts (exactly-once côté lecture) |
 | **Overwrite dynamique** des partitions | Silver + Gold | relancer réécrit seulement les partitions présentes dans l'input |
 | `--only-new` | DAG Silver | saute les `dt` déjà marquées `_SUCCESS` |
@@ -231,7 +301,7 @@ Un DAG interrompu **peut être relancé sans dupliquer** :
 
 | DAG | Fréquence | Déclenchement | Tâches |
 |---|---|---|---|
-| `dag_bronze_ingest` | quotidienne | planifiée ou manuelle | vérif quota → `batch_ingest.py` + `streaming_ingest.py` → déclenche Silver |
+| `dag_bronze_ingest` | quotidienne | planifiée ou manuelle | vérif quota → `meteofrance_ingest.py` + `streaming_ingest.py` → déclenche Silver |
 | `dag_silver_transform` | sur déclenchement | automatique (après Bronze) ou manuelle | `silver_transform.py` → déclenche Gold |
 | `dag_gold_aggregate` | sur déclenchement | automatique (après Silver) ou manuelle | `gold_transform.py` → `inference.py` → `genai_summary.py` |
 | `dag_ml_retrain` | hebdomadaire (lun. 03h00) | planifiée ou manuelle | `feature_engineering.py` → `train_model.py` |
@@ -280,12 +350,29 @@ Résultat : `/gold/meteo/ai_insights/dt=.../bulletin.json`.
 ## 11. Tests
 
 ```bash
-python -m pytest tests/test_transform.py -q
+make test                      # ou : python -m pytest tests -q
 ```
 
-Couvre : parsing ville/pays NOAA, détection des valeurs manquantes, conversion
-dixièmes → °C, validation de schéma, **déduplication**, classification des
-événements extrêmes, calcul de pente de tendance.
+**36 tests, sans Spark ni HDFS** — ils tournent hors Docker, en une seconde.
+
+- `tests/test_transform.py` — fonctions pures historiques : parsing ville/pays NOAA,
+  détection des valeurs manquantes, conversion dixièmes → °C, validation de schéma,
+  **déduplication**, classification des événements extrêmes, pente de tendance.
+- `tests/test_medallion.py` — la couche Medallion de bout en bout, avec pandas :
+  - **Bronze** : convention `source=X/year=YYYY/month=MM`, construction des URLs
+    Météo-France, périodes `previous`/`latest`, **idempotence du plan d'ingestion**
+    (reprise après interruption), génération et relecture d'un lot `.csv.gz` au
+    schéma officiel, contenu du `manifest.json` ;
+  - **Silver** : `mf_parse_number` (champs vides → NULL), `mf_parse_date`,
+    `mf_station_id`, `mf_city_name`, `mf_mean_temperature`, validation de schéma,
+    puis normalisation d'un Bronze synthétique (2 villes × 365 jours), dédup
+    `(station_id, timestamp)` et indicateurs de fenêtre ;
+  - **Gold** : agrégats quotidiens, `season_of_month`, `rain_day_ratio`,
+    `climate_profile` (12 mois × 2 villes, saisonnalité vérifiée) et détection
+    d'événements extrêmes sur le Silver produit ;
+  - **Contrôle** : le contrat de `make verify` — couverture des trois couches,
+    tolérance d'un flux temps réel encore vide, règles de verdict
+    (`OK` / `ABSENT` / `SANS _SUCCESS` / `VIDE`) et rendu du rapport.
 
 ---
 
@@ -320,11 +407,13 @@ projet-meteo/
 │   └── images/                     # Dockerfiles (spark, airflow, base, jupyter)
 ├── scripts/
 │   ├── kafka_producer.py           # producteur Open-Meteo → Kafka (5 min, quota)
-│   ├── batch_ingest.py             # ingestion batch NOAA → Bronze (idempotent)
+│   ├── meteofrance_ingest.py       # ingestion batch Météo-France → Bronze (idempotent)
+│   ├── batch_ingest.py             # ingestion batch NOAA → Bronze (facultative)
 │   ├── streaming_ingest.py         # Spark Structured Streaming Kafka → Bronze
 │   ├── hdfs_utils.py               # client WebHDFS (quotas, _SUCCESS, uploads)
 │   ├── silver_transform.py         # Bronze → Silver (validation, dédup, normalisation)
-│   ├── gold_transform.py           # Silver → Gold (KPIs, tendances, extrêmes)
+│   ├── gold_transform.py           # Silver → Gold (KPIs, tendances, extrêmes, profil)
+│   ├── verify_medallion.py         # contrôle automatique des 3 couches (make verify)
 │   └── compress_silver.py          # ré-écriture Silver en Zstd niveau 22
 ├── ml/
 │   ├── feature_engineering.py      # lags, moyennes mobiles, encodages, target J+1
@@ -346,10 +435,13 @@ projet-meteo/
 │   ├── eda_ml.ipynb                # EDA + justification du modèle
 │   └── dashboard.ipynb             # visualisations Pandas/Matplotlib
 ├── tests/
-│   └── test_transform.py           # tests unitaires (sans Spark)
+│   ├── conftest.py                 # rend scripts/ importable
+│   ├── test_transform.py           # fonctions pures (sans Spark)
+│   └── test_medallion.py           # Bronze → Silver → Gold (sans Spark)
 ├── configs/
 │   ├── spark-defaults.conf         # Zstd 22, overwrite dynamique, mémoire
 │   └── requirements.txt            # dépendances Python
+├── Makefile                        # automatisation complète (make all)
 ├── deploy.sh                       # déploiement en 1 commande
 └── README.md                       # ce document
 ```
@@ -359,7 +451,11 @@ projet-meteo/
 ## 14. Commandes utiles
 
 ```bash
-# Cluster
+# Workflow complet (recommandé)
+make all                      # tests -> cluster -> Bronze -> Silver -> Gold -> vérification
+make help                     # toutes les cibles
+
+# Cluster (équivalents bas niveau)
 ./deploy.sh up                # démarre tout (build + init HDFS/Kafka/Airflow)
 ./deploy.sh up genai          # + Ollama
 ./deploy.sh status | logs <svc> | stop | down | reset
@@ -371,8 +467,14 @@ docker compose --env-file docker/.env -f docker/docker-compose.yml   exec -T kaf
 # Taille HDFS
 docker compose --env-file docker/.env -f docker/docker-compose.yml   exec -T spark-master python /opt/project/scripts/hdfs_utils.py size /bronze
 
+# Ingestion batch Météo-France (test manuel : plan sans téléchargement)
+python scripts/meteofrance_ingest.py --dry-run --departments 75 69 13 33 59
+
+# Contrôle de la couche Medallion sur HDFS
+make verify
+
 # Tests unitaires
-python -m pytest tests/test_transform.py -q
+make test
 
 # Dashboard local (hors Docker)
 streamlit run dashboard/app.py --server.port 8501
@@ -382,13 +484,16 @@ streamlit run dashboard/app.py --server.port 8501
 
 ## 15. Notes & limites
 
-- **NOAA** : les valeurs sont en dixièmes d'unité (conversion ÷10 en Silver) ; le
-  téléchargement réel de ~6,6 Go peut prendre 1–3 h selon le réseau → mode
-  `--synthetic` ou `--target-gb 0.5` pour une démo rapide.
+- **Météo-France** : les valeurs manquantes sont des **champs vides** (et non des
+  sentinelles `-9999` comme chez NOAA) ; les unités sont déjà en °C / mm / m·s⁻¹.
+  Si `meteo.data.gouv.fr` est filtré par le réseau, `--synthetic` produit des lots
+  au schéma identique et la chaîne complète reste démontrable.
+- **NOAA** (source facultative conservée) : valeurs en dixièmes d'unité (÷10 en
+  Silver), sentinelles `-9999` / `9999` ; ~6,6 Go de téléchargement.
 - Le **partitionnement batch** est fait par lot d'ingestion (année/mois) : c'est une
   convention de dépôt (le sujet n'impose pas le découpage du contenu) ; chaque
-  fichier reste brut et n'est stocké qu'une fois. La fenêtre 2022–2025 est appliquée
-  en Silver.
+  fichier reste brut et n'est stocké qu'une fois. La fenêtre temporelle est appliquée
+  en Silver (`SILVER_START_DATE` / `SILVER_END_DATE`).
 - **Ollama** est optionnel (profil `genai`) : sans lui, le bulletin fallback
   (règles) est généré et le DAG ne casse pas.
 - Le connecteur **spark-sql-kafka** (`--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1`)
