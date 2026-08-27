@@ -107,31 +107,58 @@ make all
 
 | # | Étape | Cible | Ce qu'elle fait |
 |---|---|---|---|
-| 1 | Qualité | `test` | 36 tests unitaires (sans Spark ni HDFS) ; installe `pytest`/`pandas` si absents |
-| 2 | Pré-vol | `check-docker` | Vérifie Docker + `docker compose` v2 + démon actif, avec message explicite |
-| 3 | Cluster | `up` | `docker compose up -d --build`, puis attend le Namenode HDFS **et** le webserver Airflow |
-| 4 | Init | `init` | Crée `/bronze` `/silver` `/gold` `/models` `/checkpoints`, le topic Kafka, l'admin Airflow |
-| 5 | DAGs | `unpause` | Active les quatre DAGs |
-| 6 | Pipeline | `trigger` | Déclenche `dag_bronze_ingest`, qui enchaîne Silver puis Gold |
-| 7 | Attente | `wait-pipeline` | Sonde l'état des trois DAGs jusqu'au succès (échoue vite si un DAG casse) |
-| 8 | Contrôle | `verify` | `verify_medallion.py` : les trois couches existent, sont marquées `_SUCCESS` et non vides |
-| 9 | Sortie | `urls` | Rappelle les interfaces |
+| 1 | Pré-vol | `doctor` | Vérifie que Docker et `docker compose` v2 répondent |
+| 2 | Images | `build` | Construit les images du projet |
+| 3 | Qualité | `test` | 42 tests unitaires, **exécutés dans un conteneur** |
+| 4 | Cluster | `up` | `docker compose up -d --build` |
+| 5 | Attente | `wait-services` | Sonde WebHDFS et la santé d'Airflow depuis le réseau Docker |
+| 6 | Init | `init` + `topic` | Répertoires `/bronze` `/silver` `/gold` `/models` `/checkpoints`, puis topic Kafka |
+| 7 | DAGs | `unpause` | Active les quatre DAGs |
+| 8 | Pipeline | `pipeline` | Photographie les runs existants, déclenche `dag_bronze_ingest`, puis attend une **nouvelle** exécution réussie de chacun des trois DAGs (un succès d'hier ne compte pas) |
+| 9 | Contrôle | `verify` | `verify_medallion.py` : les trois couches existent, sont marquées `_SUCCESS` et non vides |
+| 10 | Sortie | `urls` | Rappelle les interfaces |
 
 Toute étape en échec arrête `make all` avec un code de sortie non nul :
 un « succès » silencieux sur un datalake vide est impossible.
 
+> ### Prérequis : Docker Desktop et `make`. Rien d'autre.
+>
+> **Aucun Python, aucun Java, aucun Spark à installer sur la machine.** Les
+> tests eux-mêmes tournent dans l'image du projet
+> (`docker compose run --rm kafka-producer python -m pytest`), et toute la
+> logique d'orchestration — boucles d'attente, sondes WebHDFS, lecture de
+> l'état des DAGs — s'exécute **dans les conteneurs**, via
+> `scripts/pipeline_ctl.py` (Python standard, zéro dépendance).
+>
+> Côté hôte, le `Makefile` n'invoque donc que deux binaires : **`docker`** et
+> **`echo`**. Chaque recette est **une seule commande simple** : ni `echo -e`,
+> ni `2>/dev/null`, ni boucle `bash`, ni `curl`/`grep`/`awk` — rien que
+> `cmd.exe` ne sache exécuter. Le workflow est identique sous **Windows
+> (PowerShell / cmd), macOS et Linux**.
+>
+> `scripts/pipeline_ctl.py` détecte de quel côté de la frontière Docker il
+> tourne : dans un conteneur il appelle la CLI `airflow` directement et joint
+> `namenode:9870` ; depuis l'hôte il passe par `docker compose exec` et
+> `localhost:9870`.
+>
+> Si vous *avez* Python sur votre machine, `make test-local` lance la même
+> suite en une seconde, sans conteneur.
+
 ```bash
-make help                       # liste toutes les cibles
+make help                       # aide instantanée, sans démarrer de conteneur
 make all PROFILE=genai          # + Ollama (bulletins IA)
 make all MF_DEPARTMENTS="75 69" # restreint les départements ingérés
+make all PIPELINE_TIMEOUT=3600  # allonge l'attente de la chaîne
 make re                         # reset complet (volumes compris) puis rejoue tout
 ```
 
 ### Cibles utiles
 
 ```bash
-make test          # tests unitaires seuls (aucun Docker requis)
-make lint          # compilation + pyflakes
+make doctor        # Docker et docker compose repondent-ils ?
+make test          # tests unitaires, dans un conteneur
+make test-local    # idem avec le Python de l'hote, si vous en avez un
+make lint          # compilation de tous les scripts et DAGs
 make dry-run       # plan d'ingestion Météo-France, hors ligne
 make bronze        # rejoue une couche isolément (idempotent)
 make silver
@@ -350,10 +377,11 @@ Résultat : `/gold/meteo/ai_insights/dt=.../bulletin.json`.
 ## 11. Tests
 
 ```bash
-make test                      # ou : python -m pytest tests -q
+make test          # dans un conteneur : aucun Python requis sur la machine
+make test-local    # avec le Python de l'hote, si vous en avez un
 ```
 
-**36 tests, sans Spark ni HDFS** — ils tournent hors Docker, en une seconde.
+**42 tests, sans Spark ni HDFS** — ils s'exécutent en une à deux secondes.
 
 - `tests/test_transform.py` — fonctions pures historiques : parsing ville/pays NOAA,
   détection des valeurs manquantes, conversion dixièmes → °C, validation de schéma,
@@ -372,7 +400,11 @@ make test                      # ou : python -m pytest tests -q
     d'événements extrêmes sur le Silver produit ;
   - **Contrôle** : le contrat de `make verify` — couverture des trois couches,
     tolérance d'un flux temps réel encore vide, règles de verdict
-    (`OK` / `ABSENT` / `SANS _SUCCESS` / `VIDE`) et rendu du rapport.
+    (`OK` / `ABSENT` / `SANS _SUCCESS` / `VIDE`) et rendu du rapport ;
+  - **Orchestration** : l'ordre de la chaîne, les répertoires HDFS créés, et
+    surtout le **franchissement de la frontière Docker** — `namenode_url()` et
+    la construction de la commande `airflow` doivent être correctes *depuis
+    l'hôte comme depuis un conteneur*.
 
 ---
 
@@ -414,6 +446,7 @@ projet-meteo/
 │   ├── silver_transform.py         # Bronze → Silver (validation, dédup, normalisation)
 │   ├── gold_transform.py           # Silver → Gold (KPIs, tendances, extrêmes, profil)
 │   ├── verify_medallion.py         # contrôle automatique des 3 couches (make verify)
+│   ├── pipeline_ctl.py             # pilote de make all, exécuté dans les conteneurs
 │   └── compress_silver.py          # ré-écriture Silver en Zstd niveau 22
 ├── ml/
 │   ├── feature_engineering.py      # lags, moyennes mobiles, encodages, target J+1
@@ -451,9 +484,9 @@ projet-meteo/
 ## 14. Commandes utiles
 
 ```bash
-# Workflow complet (recommandé)
-make all                      # tests -> cluster -> Bronze -> Silver -> Gold -> vérification
-make help                     # toutes les cibles
+# Workflow complet (recommandé) : Docker Desktop + make suffisent
+make all                      # Docker -> tests -> cluster -> Bronze -> Silver -> Gold -> vérification
+make help                     # toutes les cibles, sans démarrer de conteneur
 
 # Cluster (équivalents bas niveau)
 ./deploy.sh up                # démarre tout (build + init HDFS/Kafka/Airflow)
@@ -473,7 +506,7 @@ python scripts/meteofrance_ingest.py --dry-run --departments 75 69 13 33 59
 # Contrôle de la couche Medallion sur HDFS
 make verify
 
-# Tests unitaires
+# Tests unitaires (dans un conteneur : aucun Python requis sur la machine)
 make test
 
 # Dashboard local (hors Docker)
