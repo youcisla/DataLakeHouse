@@ -331,29 +331,30 @@ def download(url: str, local_path: str, force: bool = False) -> Optional[str]:
 # 4) Dépôt en Bronze (idempotent)
 # ---------------------------------------------------------------------------
 
-def _ingested_path() -> str:
-    return f"{BRONZE_ROOT}/_ingested.json"
-
-
 def load_ingested() -> set:
-    """Lots déjà ingérés (clés ``DEP:période``), depuis ``_ingested.json``."""
-    import hdfs_utils
+    """
+    Lots deja ingeres (cles ``DEP:periode``), depuis le magasin de checkpoints.
 
-    try:
-        data = hdfs_utils.hdfs_read_json(_ingested_path())
-    except IOError:
-        return set()
-    return set(data.get("batches", []))
+    L'ancien ``_ingested.json`` est repris automatiquement s'il existe encore
+    (voir ``checkpoint._import_legacy_bronze``) : aucun lot n'est retelecharge.
+    """
+    import checkpoint
+
+    return set(checkpoint.load(checkpoint.STAGE_BRONZE).get("done", []))
 
 
-def save_ingested(batches: set) -> None:
-    """Persiste la liste des lots ingérés."""
-    import hdfs_utils
+def commit_batch(department: str, period: str) -> None:
+    """
+    Marque UN lot comme ingere, et committe immediatement.
 
-    hdfs_utils.hdfs_write_json(_ingested_path(), {
-        "batches": sorted(batches),
-        "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-    })
+    C'est le point cle de la reprise : l'ancienne version ne sauvegardait que
+    tous les 5 lots, donc une interruption pouvait faire rejouer 4 lots deja
+    deposes en Bronze. Ici, une interruption ne coute jamais plus que le lot
+    en cours.
+    """
+    import checkpoint
+
+    checkpoint.mark_done(checkpoint.STAGE_BRONZE, batch_key(department, period))
 
 
 def manifest_entry(department: str, period: str, local_path: str,
@@ -439,30 +440,46 @@ def run(args: argparse.Namespace) -> int:
         hdfs_utils.write_success(BRONZE_ROOT)
         return 0
 
-    ok, failed = 0, 0
-    for dep, period in plan:
-        local = os.path.join(cache_dir, file_name(dep, period))
-        if args.synthetic:
-            write_synthetic_file(
-                local, dep,
-                dt.date(start_year, 1, 1), dt.date(end_year, 12, 31),
-                seed=1000 + int("".join(c for c in dep if c.isdigit()) or 0),
-            )
-        else:
-            url = build_url(dep, period, args.base_url)
-            if download(url, local, force=args.force) is None:
-                failed += 1
-                logger.error("Lot indisponible : %s (%s)", batch_key(dep, period), url)
-                continue
-        upload_batch(local, dep, period, ingestion_date)
-        already.add(batch_key(dep, period))
-        ok += 1
-        if ok % 5 == 0:  # sauvegarde progressive : reprise après interruption
-            save_ingested(already)
+    import checkpoint
 
-    save_ingested(already)
+    run = checkpoint.run_id("bronze")
+    logger.info("Run %s : %d lot(s) a ingerer, %d deja fait(s).",
+                run, len(plan), len(already))
+
+    ok, failed = 0, 0
+    for index, (dep, period) in enumerate(plan, start=1):
+        key = batch_key(dep, period)
+        local = os.path.join(cache_dir, file_name(dep, period))
+        logger.info("[%d/%d] lot %s", index, len(plan), key)
+        try:
+            if args.synthetic:
+                write_synthetic_file(
+                    local, dep,
+                    dt.date(start_year, 1, 1), dt.date(end_year, 12, 31),
+                    seed=1000 + int("".join(c for c in dep if c.isdigit()) or 0),
+                )
+            else:
+                url = build_url(dep, period, args.base_url)
+                if download(url, local, force=args.force) is None:
+                    failed += 1
+                    logger.error("Lot indisponible : %s (%s)", key, url)
+                    continue
+            upload_batch(local, dep, period, ingestion_date)
+        except Exception as exc:  # noqa: BLE001 - un lot rate n'arrete pas les autres
+            failed += 1
+            logger.error("Lot %s en echec : %s", key, exc)
+            continue
+        # COMMIT IMMEDIAT : le lot est en Bronze, il ne sera jamais rejoue.
+        commit_batch(dep, period)
+        already.add(key)
+        ok += 1
+
     hdfs_utils.write_success(BRONZE_ROOT)
-    logger.info("Ingestion Météo-France terminée : %d lot(s) ingérés, %d échec(s).", ok, failed)
+    checkpoint.record_run(checkpoint.STAGE_BRONZE, run,
+                          "success" if failed == 0 else "partial",
+                          batches_ingested=ok, batches_failed=failed,
+                          batches_total=len(plan))
+    logger.info("Ingestion Meteo-France terminee : %d lot(s) ingeres, %d echec(s).", ok, failed)
     return 0 if failed == 0 else 1
 
 

@@ -433,8 +433,14 @@ def compute_climate_profile(daily: "DataFrame") -> "DataFrame":
 # Écritures Gold
 # ---------------------------------------------------------------------------
 
+def gold_key(table: str, partition: str) -> str:
+    """Cle de checkpoint d'une partition Gold : ``<table>:<dt>``."""
+    return f"{table}:{partition}"
+
+
 def write_daily_aggregates(daily: "DataFrame") -> None:
     """Écrit daily_aggregates (partition dt) + _SUCCESS par dt et racine."""
+    import checkpoint
     import hdfs_utils
 
     path = f"{hdfs_base()}/gold/meteo/daily_aggregates"
@@ -442,6 +448,7 @@ def write_daily_aggregates(daily: "DataFrame") -> None:
     _write_parquet_dynamic(daily, path, ["dt"])
     for d in dts:
         hdfs_utils.write_success(f"/gold/meteo/daily_aggregates/dt={d}")
+        checkpoint.mark_done(checkpoint.STAGE_GOLD, gold_key("daily_aggregates", d))
     hdfs_utils.write_success("/gold/meteo/daily_aggregates")
     logger.info("daily_aggregates écrit (%d partition(s) dt).", len(dts))
 
@@ -495,14 +502,42 @@ def run(args: argparse.Namespace) -> None:
         end = F.lit(args.end_date).cast("date")
         silver = silver.filter((F.col("dt") >= start) & (F.col("dt") <= end))
 
+        if args.only_new:
+            # Ne recalculer que les dt dont daily_aggregates n'est pas deja
+            # marque : sans cela, Gold recalculait TOUT a chaque execution.
+            import checkpoint
+            import hdfs_utils
+
+            all_dts = [r.dt.strftime("%Y-%m-%d")
+                       for r in silver.select("dt").distinct().orderBy("dt").collect()]
+            todo = [d for d in all_dts
+                    if not checkpoint.is_done(checkpoint.STAGE_GOLD,
+                                              gold_key("daily_aggregates", d))
+                    and not hdfs_utils.has_success(f"/gold/meteo/daily_aggregates/dt={d}")]
+            skipped = len(all_dts) - len(todo)
+            if skipped:
+                logger.info("Gold --only-new : %d partition(s) deja calculee(s), ignoree(s).",
+                            skipped)
+            if not todo:
+                logger.info("Gold : rien de nouveau a calculer.")
+                return
+            silver = silver.filter(F.col("dt").cast("string").isin(todo))
+
         daily = compute_daily_aggregates(silver)
         # daily est réutilisé pour les trois agrégats : on le met en cache.
         daily.cache()
+        import checkpoint
+
+        run = checkpoint.run_id("gold")
         try:
             write_daily_aggregates(daily)
             write_weekly_trends(compute_weekly_trends(daily))
             write_extreme_events(compute_extreme_events(daily, get_thresholds()))
             write_climate_profile(compute_climate_profile(daily))
+            checkpoint.record_run(checkpoint.STAGE_GOLD, run, "success", tables=4)
+        except Exception:
+            checkpoint.record_run(checkpoint.STAGE_GOLD, run, "failed")
+            raise
         finally:
             daily.unpersist()
     finally:
@@ -521,6 +556,11 @@ def parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
         "--end-date",
         default=os.environ.get("GOLD_END_DATE", "2025-12-31"),
         help="Borne supérieure du filtre sur dt (YYYY-MM-DD).",
+    )
+    parser.add_argument(
+        "--only-new",
+        action="store_true",
+        help="Ne recalculer que les partitions dt pas encore presentes en Gold.",
     )
     return parser.parse_args(argv)
 

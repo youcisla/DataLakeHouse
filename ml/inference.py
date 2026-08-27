@@ -50,6 +50,24 @@ def _build_spark_session():
     return SparkSession.builder.appName("inference_meteo").getOrCreate()
 
 
+def model_available() -> bool:
+    """
+    Un modele entraine est-il disponible sous /models ?
+
+    Sur un cluster neuf, aucun modele n'existe encore : l'inference doit alors
+    se retirer proprement (comme le bulletin GenAI a son fallback) plutot que
+    de faire echouer tout le DAG Gold.
+    """
+    import hdfs_utils
+
+    if not hdfs_utils.hdfs_exists("/models"):
+        return False
+    for name in hdfs_utils.hdfs_list("/models"):
+        if re.match(rf"{MODEL_PREFIX}(\d+)$", name):
+            return True
+    return False
+
+
 def _resolve_version(version: str) -> int:
     """Résout la version demandée ('latest' -> max, sinon entier)."""
     if version != "latest":
@@ -105,6 +123,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                         format="%(asctime)s %(levelname)s %(message)s")
 
     from pyspark.sql import functions as F  # pylint: disable=import-outside-toplevel
+
+    if args.version == "latest" and not model_available():
+        print("Aucun modele sous /models : inference sautee "
+              "(lancez l'entrainement, puis relancez le DAG Gold).")
+        print("Le DAG n'echoue PAS : les predictions sont un bonus, "
+              "elles apparaitront des qu'un modele existera.")
+        return 0
 
     version = _resolve_version(args.version)
     artifact, metrics = _load_model(version)
