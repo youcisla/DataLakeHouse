@@ -28,6 +28,7 @@ import pytest
 
 import gold_transform
 import meteofrance_ingest as mf
+import pipeline_ctl
 import silver_transform
 import verify_medallion
 
@@ -495,3 +496,96 @@ def test_render_report_lists_every_layer():
     assert "BRONZE" in report and "GOLD" in report
     assert "/bronze/meteo/batch/source=meteofrance" in report
     assert "OK" in report and "VIDE" in report
+
+
+# ===========================================================================
+# ORCHESTRATION : contrat multiplateforme de `make all`
+# ===========================================================================
+
+def test_pipeline_dags_follow_the_medallion_order():
+    """La chaîne attendue est Bronze -> Silver -> Gold, dans cet ordre."""
+    assert pipeline_ctl.PIPELINE_DAGS == [
+        "dag_bronze_ingest", "dag_silver_transform", "dag_gold_aggregate",
+    ]
+    # Le DAG de réentraînement ML est hors chaîne (bonus, hebdomadaire).
+    assert "dag_ml_retrain" in pipeline_ctl.ALL_DAGS
+    assert "dag_ml_retrain" not in pipeline_ctl.PIPELINE_DAGS
+    assert set(pipeline_ctl.PIPELINE_DAGS) < set(pipeline_ctl.ALL_DAGS)
+
+
+def test_hdfs_dirs_cover_both_sources_and_the_three_layers():
+    dirs = pipeline_ctl.HDFS_DIRS
+    for root in ("/bronze", "/silver", "/gold", "/models", "/checkpoints"):
+        assert root in dirs
+    # Les deux sources hétérogènes exigées par le sujet.
+    assert "/bronze/meteo/batch/source=meteofrance" in dirs
+    assert "/bronze/meteo/stream/source=openmeteo" in dirs
+    # Les racines sont créées avant leurs sous-répertoires.
+    assert dirs.index("/bronze") < dirs.index("/bronze/meteo/batch/source=meteofrance")
+
+
+def test_compose_command_is_a_plain_argument_list():
+    """Aucun shell n'est invoqué : la commande reste portable Windows/Unix."""
+    command = pipeline_ctl.compose_command()
+    assert command[:2] == ["docker", "compose"]
+    assert "--env-file" in command and "-f" in command
+    assert "--profile" not in command
+    assert all(isinstance(part, str) for part in command)
+
+    with_profile = pipeline_ctl.compose_command("genai")
+    assert with_profile[-2:] == ["--profile", "genai"]
+
+
+def test_missing_requirements():
+    """`make deps` n'installe que ce qui manque vraiment."""
+    assert pipeline_ctl.missing_requirements(["pytest", "pandas"]) == []
+    assert pipeline_ctl.missing_requirements(
+        ["paquet_qui_nexiste_pas_12345"]) == ["paquet_qui_nexiste_pas_12345"]
+    assert pipeline_ctl.missing_requirements([]) == []
+
+
+def test_namenode_url_bridges_host_and_container(monkeypatch):
+    """
+    La meme fonction doit produire l'URL correcte des deux cotes de Docker.
+
+    Sur l'hote, le Namenode n'est joignable que via le port publie
+    (localhost:9870) ; dans un conteneur, via le nom de service Docker.
+    """
+    monkeypatch.delenv("NAMENODE_URL", raising=False)
+    monkeypatch.delenv("HDFS_NAMENODE", raising=False)
+    monkeypatch.delenv("HDFS_WEBHDFS_PORT", raising=False)
+    assert pipeline_ctl.namenode_url() == "http://localhost:9870"
+
+    monkeypatch.setenv("HDFS_NAMENODE", "namenode")
+    assert pipeline_ctl.namenode_url() == "http://namenode:9870"
+
+    monkeypatch.setenv("HDFS_WEBHDFS_PORT", "50070")
+    assert pipeline_ctl.namenode_url() == "http://namenode:50070"
+
+    # Une surcharge explicite l'emporte toujours, barre finale ignoree.
+    monkeypatch.setenv("NAMENODE_URL", "http://autre:9870/")
+    assert pipeline_ctl.namenode_url() == "http://autre:9870"
+
+
+def test_airflow_command_depends_on_the_execution_context(monkeypatch):
+    """
+    Dans le conteneur Airflow, la CLI est appelee directement : aucun client
+    Docker n'y est installe. Depuis l'hote, elle passe par docker compose exec.
+    """
+    captured = {}
+
+    def fake_run(command, check=False, capture=False, timeout=None):
+        captured["command"] = list(command)
+        import subprocess as sp
+        return sp.CompletedProcess(list(command), 0, "", "")
+
+    monkeypatch.setattr(pipeline_ctl, "run", fake_run)
+
+    monkeypatch.setattr(pipeline_ctl, "IN_CONTAINER", True)
+    pipeline_ctl.airflow(["dags", "list"])
+    assert captured["command"] == ["airflow", "dags", "list"]
+
+    monkeypatch.setattr(pipeline_ctl, "IN_CONTAINER", False)
+    pipeline_ctl.airflow(["dags", "list"])
+    assert captured["command"][:2] == ["docker", "compose"]
+    assert captured["command"][-4:] == ["airflow-webserver", "airflow", "dags", "list"]
