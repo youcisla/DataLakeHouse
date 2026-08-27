@@ -10,13 +10,45 @@
 
 name: datalake-meteo
 
+# ---------------------------------------------------------------------------
+#  Configuration Hadoop
+#  ATTENTION : l'image OFFICIELLE apache/hadoop attend des variables nommees
+#  d'apres le FICHIER de configuration cible, par ex. "CORE-SITE.XML_<propriete>".
+#  Le prefixe CORE_CONF_ / HDFS_CONF_ appartient aux images bde2020/hadoop-* et
+#  fait CRASHER celle-ci au demarrage : /opt/envtoconf.py decoupe le nom de la
+#  variable sur [_.], prend le 2e segment comme extension de fichier, et "conf"
+#  fait partie de ses formats connus. Il appelle alors transformation.to_conf(),
+#  qui contient un bug ("for key, val in props" sur un dict) et leve
+#      ValueError: too many values to unpack
+#  => le conteneur namenode sort en code 1 avant meme de demarrer HDFS.
+#
+#  REGLE : le 2e segment du nom (apres decoupe sur _ ou .) ne doit JAMAIS valoir
+#  conf, cfg, env, sh, yaml, yml ou properties -- sauf a viser vraiment ce format.
+#  Ici on vise .xml, d'ou "CORE-SITE.XML_<propriete>" / "HDFS-SITE.XML_<propriete>".
+# ---------------------------------------------------------------------------
 x-hadoop-env: &hadoop-env
-  CORE_CONF_fs_defaultFS: hdfs://namenode:${HDFS_RPC_PORT:-9000}
-  CORE_CONF_hadoop_http_staticuser_user: root
-  CORE_CONF_hadoop_proxyuser_root_hosts: "*"
-  CORE_CONF_hadoop_proxyuser_root_groups: "*"
-  HDFS_CONF_dfs_replication: "1"
-  HDFS_CONF_dfs_namenode_datanode_registration_ip__hostname___check: "false"
+  CORE-SITE.XML_fs.defaultFS: hdfs://namenode:${HDFS_RPC_PORT:-9000}
+  CORE-SITE.XML_hadoop.http.staticuser.user: root
+  CORE-SITE.XML_hadoop.proxyuser.root.hosts: "*"
+  CORE-SITE.XML_hadoop.proxyuser.root.groups: "*"
+  CORE-SITE.XML_hadoop.tmp.dir: /hadoop/tmp
+  HDFS-SITE.XML_dfs.replication: "1"
+  HDFS-SITE.XML_dfs.permissions.enabled: "false"
+  HDFS-SITE.XML_dfs.webhdfs.enabled: "true"
+  # Emplacements explicites : ce sont eux que montent les volumes nommes.
+  HDFS-SITE.XML_dfs.namenode.name.dir: /hadoop/dfs/name
+  HDFS-SITE.XML_dfs.datanode.data.dir: /hadoop/dfs/data
+  HDFS-SITE.XML_dfs.namenode.rpc-address: namenode:${HDFS_RPC_PORT:-9000}
+  # bind-host 0.0.0.0 : sans lui, le RPC n'ecoute que sur l'IP de eth0 (l'adresse
+  # resolue de "namenode"), donc pas sur la loopback -> toute sonde locale echoue.
+  HDFS-SITE.XML_dfs.namenode.rpc-bind-host: 0.0.0.0
+  HDFS-SITE.XML_dfs.namenode.servicerpc-bind-host: 0.0.0.0
+  HDFS-SITE.XML_dfs.namenode.http-bind-host: 0.0.0.0
+  HDFS-SITE.XML_dfs.namenode.http-address: 0.0.0.0:9870
+  HDFS-SITE.XML_dfs.datanode.use.datanode.hostname: "false"
+  HDFS-SITE.XML_dfs.client.use.datanode.hostname: "false"
+  # (les demons tournent en root via "user: root" ci-dessous, car les volumes
+  #  nommes appartiennent a root ; HDFS_NAMENODE_USER ne sert qu'a start-dfs.sh)
 
 services:
   # --------------------------------------------------------------------------
@@ -26,33 +58,39 @@ services:
     image: apache/hadoop:3.3.6
     container_name: namenode
     hostname: namenode
+    user: root
     environment: *hadoop-env
     command:
       - /bin/bash
       - -c
       - |
+        set -e
         if [ ! -f /hadoop/dfs/name/current/VERSION ]; then
-          echo "Formatage du Namenode (premier démarrage)..."
+          echo "Formatage du Namenode (premier demarrage)..."
           hdfs namenode -format -force -nonInteractive
         fi
-        hdfs namenode
+        exec hdfs namenode
     ports:
       - "9870:9870"   # UI WebHDFS
       - "${HDFS_RPC_PORT:-9000}:${HDFS_RPC_PORT:-9000}"
     volumes:
       - hdfs_namenode_data:/hadoop/dfs/name
+    # Sonde TCP en bash : l'image apache/hadoop ne fournit pas curl.
+    # On teste le port HTTP/WebHDFS (celui dont depend tout l'aval) sur la
+    # loopback, et le port RPC via le nom d'hote du conteneur.
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:9870/webhdfs/v1/?op=GETFILESTATUS&user.name=root"]
-      interval: 15s
+      test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/127.0.0.1/9870' && timeout 5 bash -c '</dev/tcp/namenode/${HDFS_RPC_PORT:-9000}'"]
+      interval: 10s
       timeout: 10s
-      retries: 20
-      start_period: 40s
+      retries: 30
+      start_period: 30s
     networks: [meteo-net]
 
   datanode:
     image: apache/hadoop:3.3.6
     container_name: datanode
     hostname: datanode
+    user: root
     environment: *hadoop-env
     command: ["hdfs", "datanode"]
     depends_on:
@@ -191,7 +229,11 @@ services:
       MF_END_YEAR: ${MF_END_YEAR:-2026}
       MF_CACHE_DIR: ${MF_CACHE_DIR:-/opt/data/meteofrance}
     command:
-      - /bin/bash
+      # L'entrypoint de l'image officielle Airflow n'accepte que 'bash' ou
+      # 'python' comme premier argument : tout le reste est passe a la CLI
+      # airflow, et '/bin/bash' y devient
+      #   airflow command error: invalid choice: '/bin/bash'  (exit 2).
+      - bash
       - -c
       - |
         airflow db migrate &&

@@ -527,6 +527,41 @@ streamlit run dashboard/app.py --server.port 8501
   convention de dépôt (le sujet n'impose pas le découpage du contenu) ; chaque
   fichier reste brut et n'est stocké qu'une fois. La fenêtre temporelle est appliquée
   en Silver (`SILVER_START_DATE` / `SILVER_END_DATE`).
+- **Configuration Hadoop (piège classique)** : l'image officielle `apache/hadoop`
+  convertit ses variables d'environnement en fichiers XML via `/opt/envtoconf.py`.
+  Ce script **découpe le nom de la variable sur `_` ou `.`** et traite le 2ᵉ segment
+  comme l'extension du fichier cible. La bonne forme est donc
+  `CORE-SITE.XML_<propriété>` / `HDFS-SITE.XML_<propriété>`.
+
+  Le préfixe `CORE_CONF_` / `HDFS_CONF_` — omniprésent dans les tutoriels, mais propre
+  aux images `bde2020/hadoop-*` — donne un 2ᵉ segment `conf`, qui figure dans les
+  formats connus du script. Celui-ci appelle alors `transformation.to_conf()`, dont le
+  code itère `for key, val in props` sur un **dictionnaire** : le namenode meurt avant
+  même de démarrer, sur `ValueError: too many values to unpack`, et Compose signale
+  seulement `dependency failed to start: container namenode exited (1)`.
+
+  **Règle à retenir** : le 2ᵉ segment du nom d'une variable passée aux conteneurs HDFS
+  ne doit jamais valoir `conf`, `cfg`, `env`, `sh`, `yaml`, `yml` ni `properties`.
+  Les emplacements `dfs.namenode.name.dir` / `dfs.datanode.data.dir` sont par ailleurs
+  déclarés explicitement (sinon HDFS écrit dans `/tmp` et rien ne survit au redémarrage,
+  malgré les volumes nommés), et les deux démons tournent en `root`, propriétaire de ces
+  volumes. Le *healthcheck* est une sonde TCP bash : l'image ne fournit pas `curl`.
+- **Entrypoint Airflow** : l'entrypoint de l'image officielle n'accepte que `bash`
+  ou `python` comme premier argument ; **tout le reste est passé à la CLI `airflow`**.
+  Un `command: ["/bin/bash", "-c", ...]` devient donc
+  `airflow /bin/bash -c ...` → `invalid choice: '/bin/bash'`, sortie 2, et Compose
+  n'affiche que `service "airflow-init" didn't complete successfully: exit 2`.
+  Écrire `bash` (sans chemin). À noter : `docker compose exec` **ne passe pas** par
+  l'entrypoint — les commandes du `Makefile` (`exec ... python3 ...`) ne sont pas concernées.
+- **Healthcheck du namenode** : `dfs.namenode.rpc-address: namenode:9000` lie le RPC à
+  l'IP résolue du nom d'hôte (`eth0`), **pas à la loopback** : une sonde sur
+  `localhost:9000` échoue même namenode parfaitement démarré. D'où les
+  `*-bind-host: 0.0.0.0` et une sonde qui vise `127.0.0.1:9870` (WebHDFS) plus le RPC
+  via le nom d'hôte.
+- **Images Docker** : l'image officielle `apache/airflow` **refuse `pip install` en root** ;
+  le `Dockerfile` repasse sur l'utilisateur `airflow` avant d'installer les paquets.
+  L'image `apache/spark` ne fournit pas de lien `python` : les commandes du `Makefile`
+  utilisent `python3`, présent dans les trois images du projet.
 - **Ollama** est optionnel (profil `genai`) : sans lui, le bulletin fallback
   (règles) est généré et le DAG ne casse pas.
 - Le connecteur **spark-sql-kafka** (`--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1`)
