@@ -22,10 +22,13 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import gzip
+import sys
+from pathlib import Path
 
 import pandas as pd
 import pytest
 
+import checkpoint
 import gold_transform
 import meteofrance_ingest as mf
 import pipeline_ctl
@@ -452,7 +455,11 @@ def test_expected_checks_cover_the_three_layers():
     # Les quatre tables Gold produites par gold_transform.
     for table in ("daily_aggregates", "weekly_trends", "extreme_events", "climate_profile"):
         assert f"/gold/meteo/{table}" in paths
-    assert all(c.required for c in checks)
+    # Les couches du TP sont toutes obligatoires ; seules les tables issues du
+    # bonus ML/GenAI sont facultatives tant que --with-ml n'est pas demande.
+    bonus = {"/gold/meteo/ml_predictions", "/gold/meteo/ai_insights"}
+    assert all(c.required for c in checks if c.path not in bonus)
+    assert all(not c.required for c in checks if c.path in bonus)
 
 
 def test_expected_checks_allow_empty_stream_on_a_fresh_cluster():
@@ -589,3 +596,244 @@ def test_airflow_command_depends_on_the_execution_context(monkeypatch):
     pipeline_ctl.airflow(["dags", "list"])
     assert captured["command"][:2] == ["docker", "compose"]
     assert captured["command"][-4:] == ["airflow-webserver", "airflow", "dags", "list"]
+
+
+# ===========================================================================
+# CHECKPOINTS : reprise fine, unite de travail par unite de travail
+# ===========================================================================
+
+@pytest.fixture()
+def cp(tmp_path, monkeypatch):
+    """Magasin de checkpoints isole, sur le backend fichier."""
+    monkeypatch.setenv("METEO_CHECKPOINT_BACKEND", "file")
+    monkeypatch.setenv("METEO_CHECKPOINT_DIR", str(tmp_path / "cp"))
+    return checkpoint
+
+
+def test_state_schema_is_resilient_to_garbage():
+    """Un checkpoint corrompu ne doit jamais faire echouer le traitement."""
+    for garbage in (None, "", 42, [], {"done": "pas une liste"}):
+        state = checkpoint.normalize_state("silver", garbage)
+        assert state["stage"] == "silver"
+        assert state["done"] == []
+        assert state["runs"] == []
+
+    # Les cles deja presentes sont conservees et dedupliquees.
+    state = checkpoint.normalize_state("silver",
+                                       {"done": ["b", "a", "a", "", "  "], "runs": [{"x": 1}]})
+    assert state["done"] == ["a", "b"]
+    assert state["runs"] == [{"x": 1}]
+
+
+def test_mark_and_pending_are_pure_and_idempotent():
+    state = checkpoint.new_state("silver")
+    assert checkpoint.pending(state, ["d1", "d2", "d3"]) == ["d1", "d2", "d3"]
+
+    marked = checkpoint.mark_done_in(state, "d2")
+    # Fonction PURE : l'etat d'origine n'est pas modifie.
+    assert checkpoint.is_done_in(state, "d2") is False
+    assert checkpoint.is_done_in(marked, "d2") is True
+    # Marquer deux fois ne change rien.
+    assert checkpoint.mark_done_in(marked, "d2")["done"] == marked["done"]
+    assert checkpoint.pending(marked, ["d1", "d2", "d3"]) == ["d1", "d3"]
+    # Les doublons de la liste d'entree sont ecartes, l'ordre est conserve.
+    assert checkpoint.pending(marked, ["d3", "d1", "d3"]) == ["d3", "d1"]
+    # forget_in permet de rejouer une unite.
+    assert checkpoint.is_done_in(checkpoint.forget_in(marked, "d2"), "d2") is False
+
+
+def test_run_journal_is_bounded():
+    """Le journal des runs ne doit pas croitre sans fin."""
+    state = checkpoint.new_state("gold")
+    for i in range(checkpoint.MAX_RUNS + 15):
+        state = checkpoint.append_run(state, {"run_id": f"run-{i}", "status": "success"})
+    assert len(state["runs"]) == checkpoint.MAX_RUNS
+    # Ce sont les plus RECENTS qui sont conserves.
+    assert state["runs"][-1]["run_id"] == f"run-{checkpoint.MAX_RUNS + 14}"
+
+
+def test_checkpoint_roundtrip_on_disk(cp):
+    cp.reset("silver")
+    assert cp.pending_keys("silver", ["2025-01-01", "2025-01-02"]) == ["2025-01-01", "2025-01-02"]
+
+    assert cp.mark_done("silver", "2025-01-01") is True
+    # Relu depuis le disque : la marque a bien ete committee.
+    assert cp.is_done("silver", "2025-01-01") is True
+    assert cp.pending_keys("silver", ["2025-01-01", "2025-01-02"]) == ["2025-01-02"]
+
+    cp.record_run("silver", "run-1", "success", partitions_written=1)
+    resume = cp.summarize_state(cp.load("silver"))
+    assert resume["done"] == 1 and resume["last_status"] == "success"
+
+
+def test_interrupted_ingestion_resumes_where_it_stopped(cp):
+    """
+    Le scenario qui motive tout ce module.
+
+    10 lots a ingerer, coupure apres le 7e : la reprise ne doit traiter que
+    les 3 restants — et surtout jamais re-ingerer les 7 premiers.
+    """
+    cp.reset(cp.STAGE_BRONZE)
+    lots = [mf.batch_key(dep, period)
+            for dep in ("75", "69", "13", "33", "59")
+            for period in (mf.PERIOD_PREVIOUS, mf.PERIOD_LATEST)]
+    assert len(lots) == 10
+
+    traites = []
+    for lot in cp.pending_keys(cp.STAGE_BRONZE, lots):
+        if len(traites) == 7:
+            break  # coupure brutale (Ctrl-C, OOM, machine qui s'eteint)
+        traites.append(lot)
+        cp.mark_done(cp.STAGE_BRONZE, lot)  # commit IMMEDIAT, lot par lot
+    assert len(traites) == 7
+
+    restants = cp.pending_keys(cp.STAGE_BRONZE, lots)
+    assert len(restants) == 3
+    assert not set(restants) & set(traites)
+
+    for lot in restants:
+        cp.mark_done(cp.STAGE_BRONZE, lot)
+    assert cp.pending_keys(cp.STAGE_BRONZE, lots) == []
+    # Total ingere = 10, aucun doublon.
+    assert len(cp.load(cp.STAGE_BRONZE)["done"]) == 10
+
+
+def test_gold_keys_are_scoped_per_table():
+    """Une meme dt peut etre faite pour une table Gold et pas pour une autre."""
+    assert gold_transform.gold_key("daily_aggregates", "2025-01-01") == (
+        "daily_aggregates:2025-01-01")
+    assert gold_transform.gold_key("climate_profile", "2025-01-01") != (
+        gold_transform.gold_key("daily_aggregates", "2025-01-01"))
+
+
+def test_reset_replays_everything(cp):
+    cp.reset(cp.STAGE_GOLD)
+    cp.mark_done(cp.STAGE_GOLD, gold_transform.gold_key("daily_aggregates", "2025-01-01"))
+    assert cp.pending_keys(cp.STAGE_GOLD, ["daily_aggregates:2025-01-01"]) == []
+    cp.reset(cp.STAGE_GOLD)
+    assert cp.pending_keys(cp.STAGE_GOLD, ["daily_aggregates:2025-01-01"]) == [
+        "daily_aggregates:2025-01-01"]
+
+
+def test_checkpoint_write_failure_never_raises(cp, monkeypatch):
+    """Un checkpoint est une optimisation : son echec ne casse pas le run."""
+    def boom(*args, **kwargs):
+        raise OSError("disque plein")
+
+    monkeypatch.setattr(checkpoint.Path, "mkdir", boom)
+    assert checkpoint.mark_done("silver", "2025-01-01") is False  # signale, mais pas d'exception
+
+
+# ===========================================================================
+# `make all` : complet ET reprenable
+# ===========================================================================
+
+def test_workflow_is_a_known_checkpoint_stage():
+    """Les etapes de `make all` sont checkpointees comme les donnees."""
+    assert checkpoint.STAGE_WORKFLOW == "workflow"
+    assert checkpoint.STAGE_WORKFLOW in checkpoint.KNOWN_STAGES
+    # Les trois etapes de donnees restent presentes.
+    for stage in (checkpoint.STAGE_BRONZE, checkpoint.STAGE_SILVER, checkpoint.STAGE_GOLD):
+        assert stage in checkpoint.KNOWN_STAGES
+
+
+def test_make_all_resumes_where_it_stopped(cp):
+    """
+    `make all` doit pouvoir etre relance en boucle sans tout refaire.
+
+    Coupure apres 'pipeline' : au passage suivant, init/unpause/pipeline sont
+    sautes et l'on reprend a 'ml'.
+    """
+    etapes = ["init", "unpause", "pipeline", "ml", "predict"]
+    cp.reset(cp.STAGE_WORKFLOW)
+
+    executees = []
+    for etape in cp.pending_keys(cp.STAGE_WORKFLOW, etapes):
+        if etape == "ml":
+            break  # coupure : le cluster tombe pendant l'entrainement
+        executees.append(etape)
+        cp.mark_done(cp.STAGE_WORKFLOW, etape)
+    assert executees == ["init", "unpause", "pipeline"]
+
+    # Deuxieme `make all` : on reprend exactement la ou l'on s'etait arrete.
+    reprise = cp.pending_keys(cp.STAGE_WORKFLOW, etapes)
+    assert reprise == ["ml", "predict"]
+    for etape in reprise:
+        cp.mark_done(cp.STAGE_WORKFLOW, etape)
+
+    # Troisieme `make all` : plus rien a faire, il est simplement vert.
+    assert cp.pending_keys(cp.STAGE_WORKFLOW, etapes) == []
+
+
+def test_force_replays_a_completed_step(cp, monkeypatch):
+    """FORCE=1 doit rejouer une etape pourtant marquee terminee."""
+    monkeypatch.setattr(pipeline_ctl, "IN_CONTAINER", True)
+    cp.reset(cp.STAGE_WORKFLOW)
+    cp.mark_done(cp.STAGE_WORKFLOW, "pipeline")
+
+    assert pipeline_ctl.step_done("pipeline") is True
+    assert pipeline_ctl.skip_if_done("pipeline", force=False) is True
+    assert pipeline_ctl.skip_if_done("pipeline", force=True) is False
+    # Une etape jamais faite n'est jamais sautee.
+    assert pipeline_ctl.skip_if_done("ml", force=False) is False
+
+
+def test_step_guard_is_inert_outside_a_container(monkeypatch):
+    """
+    Hors conteneur, HDFS est injoignable : la garde ne doit rien casser.
+
+    Elle repond 'pas fait' — l'etape est rejouee, ce qui est sans danger
+    puisque chaque etape est idempotente.
+    """
+    monkeypatch.setattr(pipeline_ctl, "IN_CONTAINER", False)
+    assert pipeline_ctl.step_done("pipeline") is False
+    assert pipeline_ctl.skip_if_done("pipeline", force=False) is False
+    pipeline_ctl.complete_step("pipeline")  # ne doit pas lever
+
+
+def test_ml_tables_required_only_after_a_full_run():
+    """
+    ml_predictions et ai_insights sont exigees apres un `make all` complet,
+    facultatives apres un simple `make pipeline`.
+    """
+    optional = {c.path: c for c in verify_medallion.expected_checks()}
+    assert optional["/gold/meteo/ml_predictions"].required is False
+    assert optional["/gold/meteo/ai_insights"].required is False
+
+    full = {c.path: c for c in verify_medallion.expected_checks(with_ml=True)}
+    assert full["/gold/meteo/ml_predictions"].required is True
+    assert full["/gold/meteo/ai_insights"].required is True
+    # Les couches de base restent obligatoires dans les deux cas.
+    assert optional["/silver/meteo"].required is True
+
+
+def test_inference_skips_cleanly_without_a_model(monkeypatch, tmp_path):
+    """
+    Sur un cluster neuf, aucun modele n'existe : l'inference doit se retirer
+    proprement (code 0) au lieu de faire echouer tout le DAG Gold.
+    """
+    import types
+
+    # inference.py importe joblib/numpy/pandas au niveau module : toujours
+    # presents dans les images du projet, pas forcement sur l'hote nu.
+    pytest.importorskip("joblib", reason="dependance ML absente hors conteneur")
+
+    fake_hdfs = types.ModuleType("hdfs_utils")
+    fake_hdfs.hdfs_exists = lambda path: False
+    fake_hdfs.hdfs_list = lambda path: []
+    monkeypatch.setitem(sys.modules, "hdfs_utils", fake_hdfs)
+
+    ml_dir = Path(__file__).resolve().parent.parent / "ml"
+    monkeypatch.syspath_prepend(str(ml_dir))
+    import inference
+
+    assert inference.model_available() is False
+
+    # /models existe mais ne contient aucun modele -> toujours False.
+    fake_hdfs.hdfs_exists = lambda path: True
+    fake_hdfs.hdfs_list = lambda path: ["autre_chose", "README"]
+    assert inference.model_available() is False
+
+    # Un modele versionne est reconnu.
+    fake_hdfs.hdfs_list = lambda path: ["temperature_predictor_v3"]
+    assert inference.model_available() is True

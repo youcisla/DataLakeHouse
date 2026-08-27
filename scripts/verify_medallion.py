@@ -50,7 +50,8 @@ class Check:
         return f"Check({self.layer}, {self.path}, required={self.required})"
 
 
-def expected_checks(allow_empty_stream: bool = False) -> List[Check]:
+def expected_checks(allow_empty_stream: bool = False,
+                    with_ml: bool = False) -> List[Check]:
     """
     Liste ordonnée des contrôles Bronze -> Silver -> Gold.
 
@@ -69,6 +70,12 @@ def expected_checks(allow_empty_stream: bool = False) -> List[Check]:
         Check("GOLD", "/gold/meteo/weekly_trends"),
         Check("GOLD", "/gold/meteo/extreme_events"),
         Check("GOLD", "/gold/meteo/climate_profile"),
+        # Tables issues du bonus ML / GenAI : obligatoires seulement apres un
+        # `make all` complet (option --with-ml), facultatives sinon.
+        Check("GOLD", "/gold/meteo/ml_predictions", required=with_ml,
+              expect_success=with_ml, expect_data=with_ml),
+        Check("GOLD", "/gold/meteo/ai_insights", required=with_ml,
+              expect_success=False, expect_data=with_ml),
     ]
 
 
@@ -151,7 +158,8 @@ def run_check(check: Check) -> Dict[str, Any]:
 
 def run(args: argparse.Namespace) -> int:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    results = [run_check(check) for check in expected_checks(args.allow_empty_stream)]
+    results = [run_check(check)
+               for check in expected_checks(args.allow_empty_stream, args.with_ml)]
 
     if args.json:
         print(json.dumps(
@@ -173,6 +181,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         description="Vérifie la couche Medallion (Bronze -> Silver -> Gold) sur HDFS")
     parser.add_argument("--allow-empty-stream", action="store_true",
                         help="Tolère un flux Open-Meteo encore vide (cluster neuf).")
+    parser.add_argument("--with-ml", action="store_true",
+                        help="Exiger aussi ml_predictions et ai_insights (bonus ML/GenAI).")
     parser.add_argument("--json", action="store_true", help="Sortie JSON.")
     return parser.parse_args(argv)
 

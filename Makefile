@@ -36,6 +36,11 @@ MF_DEPARTMENTS   ?= 75 69 13 33 59
 PIPELINE_TIMEOUT ?= 2400
 METEO_TOPIC      ?= meteo-stream
 SVC              ?= airflow-scheduler
+# FORCE=1 rejoue les etapes deja marquees terminees dans les checkpoints.
+FORCE            ?=
+FORCE_FLAG       := $(if $(FORCE),--force,)
+# GenAI n'est inclus dans `make all` que si PROFILE=genai (le modele LLM pese ~2 Go).
+GENAI_STEP       := $(if $(filter genai,$(PROFILE)),genai,)
 
 # Python de l hote : UNIQUEMENT pour la cible optionnelle test-local.
 PY               ?= python3
@@ -46,7 +51,7 @@ PY               ?= python3
 
 .PHONY: help all re doctor build test test-local lint dry-run up wait-services \
         init topic unpause pipeline wait trigger bronze silver gold ml genai \
-        verify urls status ps logs stop down reset clean
+        predict checkpoints checkpoints-reset verify urls status ps logs stop down reset clean
 
 help:  ## Affiche l aide - instantane, aucun conteneur demarre
 	@echo DataLake Meteo - automatisation du TP, Bronze puis Silver puis Gold
@@ -79,21 +84,25 @@ help:  ## Affiche l aide - instantane, aucun conteneur demarre
 	@echo   make pipeline - Declenche Bronze et attend toute la chaine
 	@echo   make bronze - Rejoue une couche isolement, idempotent
 	@echo   make silver - @echo     make gold
-	@echo   make ml - Bonus : reentrainement XGBoost
+	@echo   make ml - Entraine le modele XGBoost depuis le Silver
+	@echo   make predict - Rejoue Gold : predictions J+1 et bulletin IA
 	@echo   make genai - Bonus : Ollama et bulletins IA
+	@echo   make checkpoints - Etat de reprise des trois etapes
+	@echo   make checkpoints-reset - Vide les checkpoints
 	@echo   make verify - Controle les trois couches sur HDFS
 	@echo   make urls - Rappelle les interfaces
 	@echo ---
 	@echo   Options
-	@echo   make all PROFILE=genai - demarre aussi Ollama
+	@echo   make all PROFILE=genai - inclut aussi Ollama et les bulletins LLM
+	@echo   make all FORCE=1 - rejoue les etapes deja terminees
 	@echo     make all MF_DEPARTMENTS=75 69      restreint les departements
 	@echo   make all PIPELINE_TIMEOUT=3600 - allonge l attente de la chaine
 
 # =============================================================================
 #  LA CIBLE PRINCIPALE : tout le TP, de bout en bout, sans intervention
 # =============================================================================
-all: doctor build test up wait-services init topic unpause pipeline verify urls  ## Workflow complet : Docker -> tests -> cluster -> Bronze -> Silver -> Gold -> verification
-	@echo [make] Workflow termine : la couche Medallion est en place et verifiee.
+all: doctor build test up wait-services init topic unpause pipeline ml predict $(GENAI_STEP) verify urls  ## TOUT : cluster, Bronze, Silver, Gold, ML, predictions, verification. Relancable : reprend ou il s est arrete.
+	@echo [make] Workflow termine : Medallion, ML et predictions en place et verifies.
 
 re: reset all  ## Reset complet, volumes compris, puis rejoue tout
 
@@ -136,20 +145,20 @@ wait-services:  ## Attend que HDFS et Airflow repondent
 	@$(CTL_BASE) wait-services
 
 init:  ## Cree les repertoires HDFS du datalake
-	@$(CTL_AIRFLOW) init
+	@$(CTL_AIRFLOW) init $(FORCE_FLAG)
 
 topic:  ## Cree le topic Kafka du flux temps reel
 	@echo [make] Creation du topic Kafka $(METEO_TOPIC)...
 	@$(DCX) kafka kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic $(METEO_TOPIC) --partitions 3 --replication-factor 1
 
 unpause:  ## Active les quatre DAGs
-	@$(CTL_AIRFLOW) unpause
+	@$(CTL_AIRFLOW) unpause $(FORCE_FLAG)
 
 # =============================================================================
 #  4. Pipeline : Bronze -> Silver -> Gold
 # =============================================================================
-pipeline:  ## Declenche Bronze puis attend toute la chaine
-	@$(CTL_AIRFLOW) pipeline --timeout $(PIPELINE_TIMEOUT)
+pipeline:  ## Bronze -> Silver -> Gold, puis attend la fin de la chaine
+	@$(CTL_AIRFLOW) pipeline --timeout $(PIPELINE_TIMEOUT) $(FORCE_FLAG)
 
 wait:  ## Attend la chaine sans rien declencher
 	@$(CTL_AIRFLOW) wait --timeout $(PIPELINE_TIMEOUT)
@@ -165,8 +174,11 @@ silver:  ## Declenche dag_silver_transform, idempotent
 gold:  ## Declenche dag_gold_aggregate, idempotent
 	@$(CTL_AIRFLOW) trigger dag_gold_aggregate
 
-ml:  ## Bonus : declenche dag_ml_retrain, XGBoost
-	@$(CTL_AIRFLOW) trigger dag_ml_retrain
+ml:  ## Entraine le modele XGBoost depuis le Silver, et attend la fin
+	@$(CTL_AIRFLOW) ml --timeout $(PIPELINE_TIMEOUT) $(FORCE_FLAG)
+
+predict:  ## Rejoue Gold une fois le modele pret : predictions J+1 et bulletin IA
+	@$(CTL_AIRFLOW) predict --timeout $(PIPELINE_TIMEOUT) $(FORCE_FLAG)
 
 genai:  ## Bonus : demarre Ollama et telecharge le modele des bulletins IA
 	@$(DC) --profile genai up -d ollama
@@ -175,8 +187,14 @@ genai:  ## Bonus : demarre Ollama et telecharge le modele des bulletins IA
 # =============================================================================
 #  5. Verification et exploitation
 # =============================================================================
-verify:  ## Controle sur HDFS que Bronze, Silver et Gold sont complets
-	@$(DCX) spark-master python3 /opt/project/scripts/verify_medallion.py --allow-empty-stream
+checkpoints:  ## Affiche l etat de reprise des trois etapes
+	@$(DCX) spark-master python3 /opt/project/scripts/pipeline_ctl.py checkpoints
+
+checkpoints-reset:  ## Vide les checkpoints : tout sera rejoue au prochain run
+	@$(DCX) spark-master python3 /opt/project/scripts/pipeline_ctl.py checkpoints --reset
+
+verify:  ## Controle sur HDFS que Bronze, Silver, Gold, ML et bulletins sont complets
+	@$(DCX) spark-master python3 /opt/project/scripts/verify_medallion.py --allow-empty-stream --with-ml
 
 urls:  ## Rappelle les URLs des interfaces
 	@echo [make] Interfaces du datalake :

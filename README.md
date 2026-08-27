@@ -109,17 +109,49 @@ make all
 |---|---|---|---|
 | 1 | Pré-vol | `doctor` | Vérifie que Docker et `docker compose` v2 répondent |
 | 2 | Images | `build` | Construit les images du projet |
-| 3 | Qualité | `test` | 42 tests unitaires, **exécutés dans un conteneur** |
+| 3 | Qualité | `test` | 56 tests unitaires, **exécutés dans un conteneur** |
 | 4 | Cluster | `up` | `docker compose up -d --build` |
 | 5 | Attente | `wait-services` | Sonde WebHDFS et la santé d'Airflow depuis le réseau Docker |
 | 6 | Init | `init` + `topic` | Répertoires `/bronze` `/silver` `/gold` `/models` `/checkpoints`, puis topic Kafka |
 | 7 | DAGs | `unpause` | Active les quatre DAGs |
-| 8 | Pipeline | `pipeline` | Photographie les runs existants, déclenche `dag_bronze_ingest`, puis attend une **nouvelle** exécution réussie de chacun des trois DAGs (un succès d'hier ne compte pas) |
-| 9 | Contrôle | `verify` | `verify_medallion.py` : les trois couches existent, sont marquées `_SUCCESS` et non vides |
-| 10 | Sortie | `urls` | Rappelle les interfaces |
+| 8 | Medallion | `pipeline` | Déclenche Bronze, attend Bronze → Silver → Gold |
+| 9 | ML | `ml` | Entraîne XGBoost (`dag_ml_retrain`) **à partir du Silver**, et attend la fin |
+| 10 | Prédictions | `predict` | Rejoue le DAG Gold, modèle en main : `ml_predictions` + bulletin IA |
+| 11 | IA *(si `PROFILE=genai`)* | `genai` | Démarre Ollama et télécharge le modèle LLM |
+| 12 | Contrôle | `verify` | Les trois couches **plus** `ml_predictions` et `ai_insights` |
+| 13 | Sortie | `urls` | Rappelle les interfaces |
+
+**Pourquoi `ml` vient après `pipeline`, et `predict` après `ml`.** Les features
+d'entraînement se lisent dans `/silver/meteo` : sans Silver, pas de modèle. Et
+sans modèle, pas de prédiction. Au premier passage du DAG Gold, l'inférence se
+retire proprement (aucun modèle sous `/models`) et le bulletin IA part en mode
+fallback ; l'étape `predict` rejoue ce DAG une fois le modèle entraîné —
+`gold_transform` saute alors les partitions déjà calculées (`--only-new`), seules
+l'inférence et le bulletin refont du travail.
 
 Toute étape en échec arrête `make all` avec un code de sortie non nul :
 un « succès » silencieux sur un datalake vide est impossible.
+
+> ### `make all` est relançable en boucle
+>
+> **Chaque étape est checkpointée** (`workflow` dans `/checkpoints/medallion/`).
+> Une étape terminée est sautée au passage suivant : `make all` reprend là où il
+> s'est arrêté, quelle qu'ait été la cause de l'arrêt — coupure réseau, `Ctrl-C`,
+> machine éteinte. Relancé après un succès complet, il ne refait rien et se
+> contente d'être vert.
+>
+> ```bash
+> make all              # reprend où il en était
+> make all FORCE=1      # rejoue tout, checkpoints ignorés
+> make checkpoints      # où en est chaque étape ?
+> make checkpoints-reset
+> ```
+>
+> Les premières étapes (`doctor`, `build`, `test`, `up`, `wait-services`) tournent
+> toujours : elles précèdent HDFS — donc les checkpoints — et sont de toute façon
+> quasi instantanées (images en cache, `up` idempotent). Les tests notamment
+> tournent à **chaque** passage : sauter une suite parce qu'elle était verte la
+> fois d'avant est exactement ce qui laisse passer une régression.
 
 > ### Prérequis : Docker Desktop et `make`. Rien d'autre.
 >
@@ -163,7 +195,9 @@ make dry-run       # plan d'ingestion Météo-France, hors ligne
 make bronze        # rejoue une couche isolément (idempotent)
 make silver
 make gold
-make ml            # bonus : réentraînement XGBoost
+make ml            # entraîne XGBoost depuis le Silver, et attend la fin
+make predict       # rejoue Gold : prédictions J+1 + bulletin IA
+make checkpoints   # où en est chaque étape (reprise)
 make verify        # re-contrôle l'état des trois couches sur HDFS
 make status        # état des conteneurs
 make logs SVC=kafka-producer
@@ -315,14 +349,62 @@ Un DAG interrompu **peut être relancé sans dupliquer** :
 | Mécanisme | Où | Pourquoi c'est sûr |
 |---|---|---|
 | Marqueur `_SUCCESS` | chaque répertoire Bronze (batch + heure stream) | l'ingestion ne re-traite jamais un lot déjà complet |
-| `_ingested.json` | `/bronze/.../source=meteofrance/` | un lot (département × période) n'est jamais téléversé deux fois |
+| **Checkpoints par unité de travail** | `/checkpoints/medallion/<étape>.json` | commit **après chaque** lot / partition : une interruption ne coûte jamais plus que l'unité en cours |
 | **Checkpoint Kafka** | `/checkpoints/kafka_to_bronze` | le streaming reprend aux offsets exacts (exactly-once côté lecture) |
 | **Overwrite dynamique** des partitions | Silver + Gold | relancer réécrit seulement les partitions présentes dans l'input |
-| `--only-new` | DAG Silver | saute les `dt` déjà marquées `_SUCCESS` |
+| `--only-new` | DAG Silver **et Gold** | saute les `dt` déjà marquées `_SUCCESS` **et** déjà présentes dans les checkpoints |
 | Dédup `(station_id, timestamp)` | Silver | filet de sécurité même si un doublon arrive quand même |
 | `_SUCCESS` par partition dt | Silver/Gold | les couches aval savent exactement quoi traiter |
 
 ---
+
+### Checkpoints : reprise fine (`scripts/checkpoint.py`)
+
+Les marqueurs `_SUCCESS` donnent la granularité **partition**. Les checkpoints
+ajoutent la granularité **unité de travail**, et surtout : le commit a lieu
+**après chaque unité**, jamais par paquets.
+
+| Étape | Une unité = | Clé |
+|---|---|---|
+| `bronze_meteofrance` | un lot Météo-France | `75:latest-2025-2026` |
+| `silver` | une partition | `2025-01-15` |
+| `gold` | une table × une partition | `daily_aggregates:2025-01-15` |
+
+Concrètement : 10 lots à ingérer, coupure après le 7ᵉ → la reprise ne traite
+que les 3 restants. Avant, l'état n'était sauvegardé que tous les 5 lots, donc
+jusqu'à 4 lots déjà déposés en Bronze étaient rejoués.
+
+```bash
+make checkpoints         # où en est chaque étape ?
+make checkpoints-reset   # tout oublier : le prochain run recalcule tout
+```
+
+```
+ETAPE                 UNITES DERNIER RUN            STATUT     MAJ
+----------------------------------------------------------------------------
+bronze_meteofrance        10 bronze-20260827T151202Z success    2026-08-27T15:12:02+00:00
+silver                   365 silver-20260827T151530Z success    2026-08-27T15:15:30+00:00
+gold                     365 gold-20260827T151812Z   success    2026-08-27T15:18:12+00:00
+```
+
+Choix de conception :
+
+- **Stockage dans HDFS** (`/checkpoints/medallion/`), via `hdfs_utils` (WebHDFS) :
+  présent dans **toutes** les images du projet, donc aucune dépendance ajoutée et
+  aucune image à reconstruire. Un backend fichier (`METEO_CHECKPOINT_BACKEND=file`)
+  sert aux tests et à l'usage hors cluster.
+- **Pas de second journal en base.** Le Postgres d'Airflow enregistre déjà l'état,
+  les reprises et les durées de chaque tâche, visibles dans son UI : un ledger SQL
+  parallèle ferait doublon. Les checkpoints couvrent ce qu'Airflow ignore — la
+  progression *à l'intérieur* d'une tâche.
+- **Jamais bloquant.** Un checkpoint est une optimisation de reprise : si son
+  écriture échoue (HDFS indisponible, disque plein), le traitement continue et
+  seul un avertissement est journalisé. Un état corrompu repart à vide plutôt
+  que de faire échouer le run.
+- **Journal borné** aux 20 derniers runs par étape : le fichier ne grossit pas
+  indéfiniment.
+- **Migration automatique** depuis l'ancien `_ingested.json` : les lots déjà
+  ingérés par une version antérieure ne sont pas retéléchargés.
 
 ## 7. Orchestration Airflow
 
@@ -381,7 +463,7 @@ make test          # dans un conteneur : aucun Python requis sur la machine
 make test-local    # avec le Python de l'hote, si vous en avez un
 ```
 
-**42 tests, sans Spark ni HDFS** — ils s'exécutent en une à deux secondes.
+**56 tests, sans Spark ni HDFS** — ils s'exécutent en une à deux secondes.
 
 - `tests/test_transform.py` — fonctions pures historiques : parsing ville/pays NOAA,
   détection des valeurs manquantes, conversion dixièmes → °C, validation de schéma,
@@ -401,6 +483,13 @@ make test-local    # avec le Python de l'hote, si vous en avez un
   - **Contrôle** : le contrat de `make verify` — couverture des trois couches,
     tolérance d'un flux temps réel encore vide, règles de verdict
     (`OK` / `ABSENT` / `SANS _SUCCESS` / `VIDE`) et rendu du rapport ;
+  - **Checkpoints** : schéma d'état résilient (fichier corrompu, valeurs
+    aberrantes), pureté et idempotence des fonctions de marquage, journal borné,
+    aller-retour sur disque, échec d'écriture non bloquant, et surtout le
+    **scénario de reprise** : 10 lots, coupure après le 7ᵉ, seuls 3 rejoués ;
+  - **Workflow** : `make all` complet et relançable — coupure après `pipeline`,
+    reprise exacte à `ml` ; `FORCE=1` qui rejoue une étape pourtant terminée ;
+    garde inerte hors conteneur ; inférence qui se retire proprement sans modèle ;
   - **Orchestration** : l'ordre de la chaîne, les répertoires HDFS créés, et
     surtout le **franchissement de la frontière Docker** — `namenode_url()` et
     la construction de la commande `airflow` doivent être correctes *depuis
@@ -445,6 +534,7 @@ projet-meteo/
 │   ├── hdfs_utils.py               # client WebHDFS (quotas, _SUCCESS, uploads)
 │   ├── silver_transform.py         # Bronze → Silver (validation, dédup, normalisation)
 │   ├── gold_transform.py           # Silver → Gold (KPIs, tendances, extrêmes, profil)
+│   ├── checkpoint.py               # reprise fine, unité de travail par unité
 │   ├── verify_medallion.py         # contrôle automatique des 3 couches (make verify)
 │   ├── pipeline_ctl.py             # pilote de make all, exécuté dans les conteneurs
 │   └── compress_silver.py          # ré-écriture Silver en Zstd niveau 22
@@ -562,6 +652,11 @@ streamlit run dashboard/app.py --server.port 8501
   le `Dockerfile` repasse sur l'utilisateur `airflow` avant d'installer les paquets.
   L'image `apache/spark` ne fournit pas de lien `python` : les commandes du `Makefile`
   utilisent `python3`, présent dans les trois images du projet.
+- **Inférence sans modèle** : sur un cluster neuf, `/models` est vide.
+  `ml/inference.py` le détecte et **se retire avec un code 0** au lieu de lever :
+  sans cela la tâche `inference_ml` échouait, `bulletin_genai` était sauté et tout
+  le DAG Gold passait en `failed`. Même philosophie que le bulletin IA, qui a
+  toujours eu un fallback pour ne jamais casser le pipeline.
 - **Ollama** est optionnel (profil `genai`) : sans lui, le bulletin fallback
   (règles) est généré et le DAG ne casse pas.
 - Le connecteur **spark-sql-kafka** (`--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1`)

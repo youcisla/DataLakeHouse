@@ -593,10 +593,17 @@ def write_silver(silver: "DataFrame", only_new: bool) -> None:
     ]
 
     if only_new:
-        dts = [d for d in all_dts if not hdfs_utils.has_success(f"/silver/meteo/dt={d}")]
-        skipped = set(all_dts) - set(dts)
+        # Double filet : le checkpoint (rapide, une seule lecture) ET le
+        # marqueur _SUCCESS (source de verite cote donnees). Une partition
+        # n'est rejouee que si les DEUX disent qu'elle manque.
+        import checkpoint
+
+        candidates = checkpoint.pending_keys(checkpoint.STAGE_SILVER, all_dts)
+        dts = [d for d in candidates if not hdfs_utils.has_success(f"/silver/meteo/dt={d}")]
+        skipped = [d for d in all_dts if d not in dts]
         if skipped:
-            logger.info("Partitions déjà écrites (--only-new) ignorées : %s", sorted(skipped))
+            logger.info("Partitions deja ecrites (--only-new) ignorees : %d (%s...)",
+                        len(skipped), ", ".join(sorted(skipped)[:5]))
     else:
         dts = all_dts
 
@@ -612,11 +619,17 @@ def write_silver(silver: "DataFrame", only_new: bool) -> None:
     logger.info("Écriture Silver vers %s (%d partition(s) dt)", silver_path, len(dts))
     _write_parquet_dynamic(silver, silver_path, ["dt"])
 
-    # Marqueurs d'idempotence (par partition puis racine).
+    # Marqueurs d'idempotence (par partition puis racine) + checkpoints.
+    import checkpoint
+
+    run = checkpoint.run_id("silver")
     for d in dts:
         hdfs_utils.write_success(f"/silver/meteo/dt={d}")
+        checkpoint.mark_done(checkpoint.STAGE_SILVER, d)
     hdfs_utils.write_success("/silver/meteo")
-    logger.info("Silver écrit : %d partition(s), _SUCCESS déposés.", len(dts))
+    checkpoint.record_run(checkpoint.STAGE_SILVER, run, "success",
+                          partitions_written=len(dts))
+    logger.info("Silver ecrit : %d partition(s), _SUCCESS et checkpoints deposes.", len(dts))
 
 
 def run(args: argparse.Namespace) -> None:

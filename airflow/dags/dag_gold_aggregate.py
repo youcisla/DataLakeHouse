@@ -51,10 +51,12 @@ with DAG(
         application_args=[
             "--start-date", os.environ.get("SILVER_START_DATE", "2022-01-01"),
             "--end-date", os.environ.get("SILVER_END_DATE", "2025-12-31"),
+            "--only-new",
         ],
         verbose=False,
         doc_md="Calcule daily_aggregates, weekly_trends, extreme_events et climate_profile "
-               "(overwrite dynamique + _SUCCESS).",
+               "(overwrite dynamique + _SUCCESS). --only-new saute les partitions dt "
+               "deja calculees : un DAG relance ne recalcule pas tout le Gold.",
     )
 
     t_inference = SparkSubmitOperator(
