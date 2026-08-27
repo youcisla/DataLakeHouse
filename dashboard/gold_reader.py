@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-gold_reader.py — Lecture des tables Gold (Parquet sur HDFS) via WebHDFS REST.
+gold_reader.py : lecture des tables Gold (Parquet sur HDFS) via WebHDFS REST.
 ==============================================================================
 
 Le conteneur du dashboard ne dispose pas d'un client HDFS binaire : les tables
@@ -15,7 +15,7 @@ Fonctions principales :
     - read_parquet_dir() : lit tous les *.parquet d'un répertoire (récursif).
     - read_gold_table()  : wrapper filtrant éventuellement par date (dt).
 
-Auteur : Soufiane — Équipe DataLake Météo
+Auteur : Soufiane, équipe DataLake Météo
 """
 
 from __future__ import annotations
@@ -126,7 +126,7 @@ def webhdfs_list(remote_dir: str) -> List[str]:
             return [entry.get("pathSuffix", "") for entry in statuses]
         except requests.RequestException as exc:
             last_exc = exc
-            logger.warning("LISTSTATUS %s — tentative %d/%d (%s)",
+            logger.warning("LISTSTATUS %s : tentative %d/%d (%s)",
                            remote_dir, attempt, RETRIES, exc)
             if attempt < RETRIES:
                 time.sleep(BACKOFF_SECONDS * attempt)
@@ -205,7 +205,7 @@ def read_parquet_dir(remote_dir: str, local_dir: Optional[str] = None,
     try:
         files = _list_parquet_files(remote_dir)
     except requests.ConnectionError as exc:
-        logger.warning("Namenode injoignable (%s) — aucune donnée Gold lue.", exc)
+        logger.warning("Namenode injoignable (%s) : aucune donnée Gold lue.", exc)
         return pd.DataFrame()
     except requests.RequestException as exc:
         logger.warning("Lecture WebHDFS impossible pour %s : %s", remote_dir, exc)

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-train_model.py — Entraînement du modèle de prévision de température (DataLake Météo).
+train_model.py : entraînement du modèle de prévision de température (DataLake Météo).
 =====================================================================================
 Entraîne un XGBRegressor (avec recherche d'hyperparamètres GridSearchCV) sur le jeu
 de features produit par `ml/feature_engineering.py`, puis publie le modèle et ses
@@ -9,7 +9,7 @@ métriques sur HDFS sous `/models/temperature_predictor_v{N}`.
 Le split est TEMPOREL (jamais aléatoire) : tri par (location, timestamp), puis
 train < validation < test sur l'axe du temps.
 
-Auteur : Sara — Équipe DataLake Météo
+Auteur : Sara, équipe DataLake Météo
 """
 
 from __future__ import annotations

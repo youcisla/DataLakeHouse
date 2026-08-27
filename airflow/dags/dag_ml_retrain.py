@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-dag_ml_retrain.py — DAG 4 : Réentraînement hebdomadaire du modèle ML
+dag_ml_retrain.py : DAG 4, réentraînement hebdomadaire du modèle ML
 ===================================================================
 1. feature_engineering.py : construction des features (lags J-1/J-2/J-7,
    moyennes mobiles 3j/7j, encodage ville/saison, normalisation) depuis Silver.
@@ -10,7 +10,7 @@ dag_ml_retrain.py — DAG 4 : Réentraînement hebdomadaire du modèle ML
 
 Planification : chaque lundi à 03h00. Relançable à tout moment.
 
-Auteur : Youcef — Équipe DataLake Météo
+Auteur : Youcef, équipe DataLake Météo
 """
 
 from __future__ import annotations

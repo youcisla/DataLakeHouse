@@ -1,5 +1,5 @@
 # ============================================================
-#  Dépendances Python — Projet DataLake Météo
+#  Dépendances Python : projet DataLake Météo
 #  (hors environnement Airflow, voir docker/images/airflow/Dockerfile)
 # ============================================================
 

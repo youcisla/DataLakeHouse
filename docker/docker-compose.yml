@@ -1,5 +1,5 @@
 # ============================================================================
-#  docker-compose.yml — Projet DataLake Météo (TP Big Data)
+#  docker-compose.yml : projet DataLake Météo (TP Big Data)
 #  Cluster : HDFS (namenode + datanode) | Spark (master + worker)
 #            Kafka (zookeeper + broker) | Airflow (postgres + webserver +
 #            scheduler) | Jupyter | Streamlit | Ollama (profil optionnel)
@@ -291,7 +291,7 @@ services:
     networks: [meteo-net]
 
   # --------------------------------------------------------------------------
-  # 8. Ollama (LLM local pour les bulletins GenAI) — PROFIL OPTIONNEL
+  # 8. Ollama (LLM local pour les bulletins GenAI), profil optionnel
   #    Démarrage : ./deploy.sh up genai  puis  docker exec ollama ollama pull llama3.2:3b
   # --------------------------------------------------------------------------
   ollama:

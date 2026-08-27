@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-compress_silver.py — Job Spark de re-compression du Silver (DataLake Météo).
+compress_silver.py : job Spark de re-compression du Silver (DataLake Météo).
 ===========================================================================
 Relit /silver/meteo et le réécrit en place en Parquet partitionné par dt,
 en forçant la compression Zstd niveau 22 (overwrite dynamique → idempotent).

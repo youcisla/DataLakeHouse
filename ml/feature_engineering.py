@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-feature_engineering.py — Ingénierie de features météo (DataLake Météo).
+feature_engineering.py : ingénierie de features météo (DataLake Météo).
 =======================================================================
 Transforme les données Silver (observations par localisation) en un jeu de
 features tabulaires prêt pour l'entraînement d'un modèle de prévision de
@@ -12,7 +12,7 @@ cluster. Le CLI (`python feature_engineering.py`) lit la couche Silver via
 Spark, applique `build_features`, puis téléverse le résultat sur HDFS via
 `hdfs_utils`.
 
-Auteur : Sara — Équipe DataLake Météo
+Auteur : Sara, équipe DataLake Météo
 """
 
 from __future__ import annotations

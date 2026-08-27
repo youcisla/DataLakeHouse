@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-ml_panel.py — Panneau « Prédictions ML » du dashboard Streamlit.
+ml_panel.py : panneau « Prédictions ML » du dashboard Streamlit.
 =================================================================
 
 Affiche les KPIs (RMSE, MAE, prédictions J+1), les graphiques
 « Prévisions vs réalité » et « Erreurs de prédiction », la confiance moyenne
 par ville ainsi que le tableau des prochaines prédictions.
 
-Auteur : Soufiane — Équipe DataLake Météo
+Auteur : Soufiane, équipe DataLake Météo
 """
 
 from __future__ import annotations
@@ -64,8 +64,8 @@ def render_ml_panel(reader) -> None:
     n_future = int(recent["temp_actual"].isna().sum()) if "temp_actual" in recent.columns else 0
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("RMSE (°C)", f"{rmse:.2f}" if not np.isnan(rmse) else "—")
-    col2.metric("MAE (°C)", f"{mae:.2f}" if not np.isnan(mae) else "—")
+    col1.metric("RMSE (°C)", f"{rmse:.2f}" if not np.isnan(rmse) else "n.d.")
+    col2.metric("MAE (°C)", f"{mae:.2f}" if not np.isnan(mae) else "n.d.")
     col3.metric("Prédictions J+1 à venir", n_future)
 
     _render_predictions_vs_actual(recent)
@@ -78,7 +78,7 @@ def _render_predictions_vs_actual(recent: pd.DataFrame) -> None:
     """Graphique comparant températures réelles et prédites par ville."""
     st.subheader("Prévisions vs réalité")
     if "city" not in recent.columns:
-        st.info("Colonne 'city' absente — graphique impossible.")
+        st.info("Colonne 'city' absente : graphique impossible.")
         return
 
     fig = go.Figure()
@@ -87,12 +87,12 @@ def _render_predictions_vs_actual(recent: pd.DataFrame) -> None:
         if "temp_actual" in grp.columns and grp["temp_actual"].notna().any():
             fig.add_trace(go.Scatter(
                 x=grp["dt"], y=grp["temp_actual"], mode="lines+markers",
-                name=f"{city} — réel", line=dict(width=2),
+                name=f"{city} (réel)", line=dict(width=2),
             ))
         if "temp_predicted" in grp.columns and grp["temp_predicted"].notna().any():
             fig.add_trace(go.Scatter(
                 x=grp["dt"], y=grp["temp_predicted"], mode="markers",
-                name=f"{city} — prévu", marker=dict(symbol="x", size=9),
+                name=f"{city} (prévu)", marker=dict(symbol="x", size=9),
             ))
     if not fig.data:
         st.info("Aucune donnée réelle/prédite à afficher.")
@@ -134,7 +134,7 @@ def _render_confidence(recent: pd.DataFrame) -> None:
         st.info("Aucune information de confiance disponible.")
         return
     if "city" not in recent.columns:
-        st.info("Colonne 'city' absente — indicateur impossible.")
+        st.info("Colonne 'city' absente : indicateur impossible.")
         return
     for city, grp in recent.groupby("city"):
         conf = grp["confidence"].dropna()

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-dag_silver_transform.py — DAG 2 : Transformation Bronze → Silver
+dag_silver_transform.py : DAG 2, transformation Bronze → Silver
 ================================================================
 Job Spark qui :
   1. lit les partitions Bronze ayant un marqueur _SUCCESS (batch NOAA + stream Open-Meteo),
@@ -14,7 +14,7 @@ Job Spark qui :
 Déclenché automatiquement après dag_bronze_ingest (TriggerDagRunOperator),
 relançable manuellement sans risque (idempotence).
 
-Auteur : Youcef — Équipe DataLake Météo
+Auteur : Youcef, équipe DataLake Météo
 """
 
 from __future__ import annotations

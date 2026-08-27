@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-silver_transform.py — Job Spark « Bronze vers Silver » (DataLake Météo).
+silver_transform.py : job Spark « Bronze vers Silver » (DataLake Météo).
 =======================================================================
 Lit les données Bronze (NOAA en CSV + Open-Meteo en JSON) sur HDFS, les
 normalise vers un schéma Silver unifié, calcule des indicateurs de fenêtre

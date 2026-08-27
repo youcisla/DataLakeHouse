@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-batch_ingest.py — Ingestion batch NOAA (GHCN-D) vers Bronze
+batch_ingest.py : ingestion batch NOAA (GHCN-D) vers Bronze
 =============================================================
 Télécharge un sous-ensemble de fichiers CSV de stations NOAA
 (Global Historical Climatology Network Daily) pour atteindre la cible
@@ -18,7 +18,7 @@ retélécharge et ne réingère jamais deux fois la même station.
 Mode --synthetic : génère des CSV au même schéma NOAA (utile si le réseau
 scolaire bloque l'accès à NOAA ou pour une démo sans téléchargement).
 
-Auteur : Youcef — Équipe DataLake Météo
+Auteur : Youcef, équipe DataLake Météo
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ def list_station_files(base_url: str, max_pages: int = MAX_PAGES) -> List[str]:
             resp = requests.get(url, timeout=HTTP_TIMEOUT)
             resp.raise_for_status()
         except requests.RequestException as exc:
-            logger.warning("Page %d inaccessible (%s) — arrêt de l'énumération.", page, exc)
+            logger.warning("Page %d inaccessible (%s) : arrêt de l'énumération.", page, exc)
             break
         found = [f"{base_url}{m}" for m in STATION_RE.findall(resp.text)]
         if not found:
@@ -201,7 +201,7 @@ def upload_to_bronze(local: str, station: str, ingestion_date: dt.date) -> str:
     base = f"/bronze/meteo/batch/source=noaa/year={year}/month={month}"
     remote = f"{base}/{station}.csv"
     if hdfs_utils.hdfs_exists(remote):
-        logger.info("Déjà présent en Bronze : %s — ignoré.", remote)
+        logger.info("Déjà présent en Bronze : %s, ignoré.", remote)
         return remote
     hdfs_utils.hdfs_upload(local, remote)
     # Manifest du lot (métadonnées d'ingestion, fichier toujours brut)
@@ -320,7 +320,7 @@ def run_ingestion(args: argparse.Namespace) -> int:
     logger.info("Énumération des fichiers NOAA (%s)...", base_url)
     urls = list_station_files(base_url, args.max_pages)
     if not urls:
-        logger.error("Aucune station trouvée sur %s — vérifiez le réseau ou utilisez --synthetic.",
+        logger.error("Aucune station trouvée sur %s : vérifiez le réseau ou utilisez --synthetic.",
                      base_url)
         return 2
     selected = select_stations(urls, target_gb, args.limit_stations)

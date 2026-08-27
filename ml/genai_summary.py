@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-genai_summary.py — Bulletin météo génératif (DataLake Météo).
+genai_summary.py : bulletin météo génératif (DataLake Météo).
 ==============================================================
 Génère un bulletin météo en français (style présentateur professionnel) à partir
 des agrégats Gold (daily_aggregates), des événements extrêmes (extreme_events) et
@@ -10,7 +10,7 @@ généré.
 
 Résultat : /gold/meteo/ai_insights/dt={date}/bulletin.json (+ marqueur _SUCCESS).
 
-Auteur : Sara — Équipe DataLake Météo
+Auteur : Sara, équipe DataLake Météo
 """
 
 from __future__ import annotations

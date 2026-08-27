@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-test_transform.py — Tests unitaires SANS Spark des transformations Silver/Gold.
+test_transform.py : tests unitaires sans Spark des transformations Silver/Gold.
 ===============================================================================
 Ces tests n'importent ni Spark ni HDFS : ils valident uniquement les fonctions
 pures de silver_transform et gold_transform (avec pandas pour la logique de
@@ -24,7 +24,7 @@ import gold_transform
 
 
 # ---------------------------------------------------------------------------
-# silver_transform — fonctions pures
+# silver_transform : fonctions pures
 # ---------------------------------------------------------------------------
 
 def test_parse_city_country():
@@ -81,7 +81,7 @@ def test_silver_schema_columns():
 
 
 # ---------------------------------------------------------------------------
-# gold_transform — fonctions pures
+# gold_transform : fonctions pures
 # ---------------------------------------------------------------------------
 
 THRESHOLDS = {

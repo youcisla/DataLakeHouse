@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-app.py — Application Streamlit « Dashboard Météo — DataLake ».
+app.py : application Streamlit « Dashboard Météo (DataLake) ».
 ===============================================================
 
 Panneaux :
@@ -8,7 +8,7 @@ Panneaux :
     - Prédictions ML  (via ml_panel.py)
     - Bulletin IA     (via genai_panel.py)
 
-Auteur : Soufiane — Équipe DataLake Météo
+Auteur : Soufiane, équipe DataLake Météo
 """
 
 from __future__ import annotations
@@ -149,13 +149,13 @@ def render_overview(config: dict) -> None:
         else:
             grp = pd.DataFrame()
         if grp.empty:
-            col.metric(city, "—", help="Aucune donnée pour cette date")
+            col.metric(city, "n.d.", help="Aucune donnée pour cette date")
             continue
         row = _select_source_row(grp).iloc[0]
         temp_avg = row.get("temp_avg")
         temp_min = row.get("temp_min")
         temp_max = row.get("temp_max")
-        value = f"{float(temp_avg):.1f} °C" if pd.notna(temp_avg) else "—"
+        value = f"{float(temp_avg):.1f} °C" if pd.notna(temp_avg) else "n.d."
         col.metric(city, value)
         parts = []
         if pd.notna(temp_min):
@@ -172,9 +172,9 @@ def render_overview(config: dict) -> None:
 
 def _render_map(last_day: pd.DataFrame, cities: list) -> None:
     """Carte de France des températures (scatter mapbox open-street-map)."""
-    st.subheader("Carte de France — températures du jour")
+    st.subheader("Carte de France (températures du jour)")
     if "city" not in last_day.columns:
-        st.info("Colonne 'city' absente — carte impossible.")
+        st.info("Colonne 'city' absente : carte impossible.")
         return
     records = []
     for city in cities:
@@ -216,7 +216,7 @@ def _render_map(last_day: pd.DataFrame, cities: list) -> None:
 
 def _render_temperature_trend(daily: pd.DataFrame) -> None:
     """Évolution des températures sur 30 jours (source OPENMETEO)."""
-    st.subheader("Évolution des températures — 30 derniers jours (Open-Meteo)")
+    st.subheader("Évolution des températures (30 derniers jours, Open-Meteo)")
     last_dt = daily["dt"].max()
     window = daily[daily["dt"] >= (last_dt - pd.Timedelta(days=30))]
     if "source" in window.columns:
@@ -239,7 +239,7 @@ def _render_temperature_trend(daily: pd.DataFrame) -> None:
 
 def _render_extreme_events(last_dt: pd.Timestamp) -> None:
     """Tableau des événements extrêmes des 7 derniers jours (badges colorés)."""
-    st.subheader("Événements extrêmes — 7 derniers jours")
+    st.subheader("Événements extrêmes (7 derniers jours)")
     events = gold_reader.read_gold_table("extreme_events")
     if events.empty or "dt" not in events.columns:
         st.info("Aucun événement extrême disponible pour le moment.")
@@ -273,7 +273,7 @@ def main() -> None:
     """Point d'entrée de l'application Streamlit."""
     config = gold_reader.load_config()
     theme = config.get("theme") or {}
-    title = (config.get("dashboard") or {}).get("title", "🌤️ Dashboard Météo — DataLake")
+    title = (config.get("dashboard") or {}).get("title", "🌤️ Dashboard Météo (DataLake)")
     interval = int((config.get("refresh") or {}).get("interval_seconds", 30))
 
     st.set_page_config(page_title=title, layout="wide", page_icon="🌤️")

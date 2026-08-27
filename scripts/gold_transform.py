@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-gold_transform.py — Job Spark « Silver vers Gold » (DataLake Météo).
+gold_transform.py : job Spark « Silver vers Gold » (DataLake Météo).
 =====================================================================
 Lit le Silver (/silver/meteo) et produit trois agrégats Gold :
-    1. daily_aggregates  — agrégats quotidiens par (dt, city, source) ;
-    2. weekly_trends     — tendances hebdomadaires + pente de régression ;
-    3. extreme_events    — événements extrêmes via classify_extreme.
+    1. daily_aggregates  : agrégats quotidiens par (dt, city, source) ;
+    2. weekly_trends     : tendances hebdomadaires + pente de régression ;
+    3. extreme_events    : événements extrêmes via classify_extreme.
 
 Conception :
     - Les imports pyspark sont réalisés À L'INTÉRIEUR des fonctions pour

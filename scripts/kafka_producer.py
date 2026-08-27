@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-kafka_producer.py — Producteur Kafka (source temps réel Open-Meteo)
+kafka_producer.py : producteur Kafka (source temps réel Open-Meteo)
 ====================================================================
 Interroge l'API Open-Meteo (https://open-meteo.com) toutes les 5 minutes
 pour les 5 villes surveillées (Paris, Lyon, Marseille, Bordeaux, Lille)
@@ -9,7 +9,7 @@ et publie chaque relevé au format JSON sur le topic Kafka "meteo-stream".
 Le producteur s'arrête automatiquement lorsque le quota Bronze est atteint
 (voir BRONZE_QUOTA_GB) : contrôle via WebHDFS à chaque lot de 5 envois.
 
-Auteur : Youcef — Équipe DataLake Météo
+Auteur : Youcef, équipe DataLake Météo
 """
 
 from __future__ import annotations
@@ -113,7 +113,7 @@ def check_quota(quota_gb: float) -> bool:
     try:
         return hdfs_utils.quota_reached("/bronze", quota_gb)
     except IOError as exc:
-        logger.warning("Quota non vérifiable (%s) — poursuite.", exc)
+        logger.warning("Quota non vérifiable (%s) : poursuite.", exc)
         return False
 
 
@@ -122,7 +122,7 @@ class GracefulStop(Exception):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Producteur Kafka — Open-Meteo vers topic météo")
+    parser = argparse.ArgumentParser(description="Producteur Kafka : Open-Meteo vers topic météo")
     parser.add_argument("--once", action="store_true",
                         help="Un seul envoi (toutes les villes) puis arrêt")
     parser.add_argument("--max-runs", type=int, default=None,
@@ -191,7 +191,7 @@ def main() -> int:
                     break
             time.sleep(interval)
     except GracefulStop:
-        logger.info("Arrêt demandé (signal) — arrêt propre du producteur.")
+        logger.info("Arrêt demandé (signal) : arrêt propre du producteur.")
     except KeyboardInterrupt:
         logger.info("Arrêt par Ctrl-C.")
     finally:

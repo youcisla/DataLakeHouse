@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  deploy.sh — Script de déploiement du cluster DataLake Météo
+#  deploy.sh : script de déploiement du cluster DataLake Météo
 #  ----------------------------------------------------------------------------
 #  Usage :
 #    ./deploy.sh up          Démarre tout le cluster (build des images inclus)

@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-inference.py — Inférence de température à J+1 (DataLake Météo).
+inference.py : inférence de température à J+1 (DataLake Météo).
 ================================================================
 Charge le meilleur modèle (`/models/temperature_predictor_v{N}`), construit les
 features sur les `--days` derniers jours de Silver, prédit la température du
 lendemain pour chaque localisation, puis écrit les prédictions dans
 `/gold/meteo/ml_predictions` (partitionné par `dt`, overwrite dynamique).
 
-Auteur : Sara — Équipe DataLake Météo
+Auteur : Sara, équipe DataLake Météo
 """
 
 from __future__ import annotations

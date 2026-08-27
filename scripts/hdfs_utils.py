@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-hdfs_utils.py — Utilitaires HDFS (client WebHDFS) pour le projet DataLake Météo.
+hdfs_utils.py : utilitaires HDFS (client WebHDFS) pour le projet DataLake Météo.
 =================================================================================
 Ce module expose des fonctions simples basées sur l'API REST WebHDFS
 (http://namenode:9870/webhdfs/v1/...) afin de fonctionner depuis n'importe
@@ -13,7 +13,7 @@ Fonctions principales :
     - has_success / write_success  (marqueurs d'idempotence "_SUCCESS")
     - quota_reached (vérification du quota Bronze)
 
-Auteur : Youcef — Équipe DataLake Météo
+Auteur : Youcef, équipe DataLake Météo
 """
 
 from __future__ import annotations

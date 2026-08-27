@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-dag_bronze_ingest.py — DAG 1 : Ingestion Bronze (batch NOAA + streaming Open-Meteo)
+dag_bronze_ingest.py : DAG 1, ingestion Bronze (batch NOAA + streaming Open-Meteo)
 ===================================================================================
 - Tâche batch : télécharge les CSV NOAA (cible NOAA_TARGET_GB) et les dépose
   BRUTS dans /bronze/meteo/batch/source=noaa/year=YYYY/month=MM/ avec marqueur
@@ -10,7 +10,7 @@ dag_bronze_ingest.py — DAG 1 : Ingestion Bronze (batch NOAA + streaming Open-M
 - Contrôle de quota : si le Bronze dépasse BRONZE_QUOTA_GB, le streaming est
   sauté (le producteur Kafka s'arrête également tout seul côté service).
 
-Auteur : Youcef — Équipe DataLake Météo
+Auteur : Youcef, équipe DataLake Météo
 """
 
 from __future__ import annotations

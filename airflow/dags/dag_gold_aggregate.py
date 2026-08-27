@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-dag_gold_aggregate.py — DAG 3 : Agrégation Silver → Gold + ML + GenAI
+dag_gold_aggregate.py : DAG 3, agrégation Silver → Gold + ML + GenAI
 =====================================================================
 Job Spark qui calcule depuis Silver :
   - daily_aggregates  : KPIs journaliers par ville (temp moy/min/max, précip, vent...)
@@ -13,7 +13,7 @@ Puis enchaîne :
 Idempotence : overwrite dynamique des partitions + marqueurs _SUCCESS.
 Déclenché après dag_silver_transform, relançable manuellement.
 
-Auteur : Youcef — Équipe DataLake Météo
+Auteur : Youcef, équipe DataLake Météo
 """
 
 from __future__ import annotations

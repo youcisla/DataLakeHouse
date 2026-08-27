@@ -1,9 +1,9 @@
-# 🌤️ Projet DataLake Météo — TP Big Data (DataLake / DataLakehouse)
+# 🌤️ Projet DataLake Météo, TP Big Data (DataLake / DataLakehouse)
 
-> **Thème : Météo & analyse climatique** — un datalake **Bronze → Silver → Gold**
+> **Thème : Météo & analyse climatique**. Un datalake **Bronze → Silver → Gold**
 > persistant sur **HDFS**, ingérant deux sources hétérogènes (une **batch** : NOAA GHCN-D,
 > une **temps réel** : Open-Meteo via Kafka + Spark Structured Streaming),
-> orchestré de bout en bout par **Airflow**, avec **ML (XGBoost)**, **IA générative (Ollama)**
+> orchestré par **Airflow**, avec **ML (XGBoost)**, **IA générative (Ollama)**
 > et **dashboard Streamlit**.
 
 **Équipe :** Youcef (architecture/backend) · Sarah (couche Medallion) · Sara (ML & GenAI) · Soufiane (dashboard)
@@ -18,7 +18,7 @@ Concevoir et implémenter un datalake en architecture Bronze → Silver → Gold
    Kafka → consommé en continu par **Spark Structured Streaming** → écrit en **Bronze**),
    les archives batch étant déposées en Bronze avec un **marqueur d'idempotence `_SUCCESS`** ;
 2. **Persiste et transforme** chaque couche sur HDFS (Silver = validation, déduplication,
-   normalisation, Parquet Zstd ; Gold = agrégations/KPIs métier) — **aucune étape manuelle** ;
+   normalisation, Parquet Zstd ; Gold = agrégations/KPIs métier), **sans aucune étape manuelle** ;
 3. **Orchestre** le tout avec **Airflow** : un DAG par couche, dépendances explicites,
    et un DAG interrompu **relançable sans dupliquer** les données ;
 4. **Restitue** via un dashboard Streamlit **et** un notebook Jupyter (lecture directe
@@ -76,16 +76,16 @@ Concevoir et implémenter un datalake en architecture Bronze → Silver → Gold
 | Service | Image | Port(s) | Rôle |
 |---|---|---|---|
 | `namenode` | apache/hadoop:3.3.6 | 9870 (UI/WebHDFS), 9000 (RPC) | Namenode HDFS |
-| `datanode` | apache/hadoop:3.3.6 | — | Datanode HDFS |
+| `datanode` | apache/hadoop:3.3.6 | aucun | Datanode HDFS |
 | `zookeeper` | confluentinc/cp-zookeeper:7.5.3 | 2181 | Coordination Kafka |
 | `kafka` | confluentinc/cp-kafka:7.5.3 | 9092 | Broker (topic `meteo-stream`) |
 | `spark-master` | meteo-spark:3.5.1 (build) | 8080 (UI), 7077, 4040 | Master Spark + driver des jobs |
-| `spark-worker` | meteo-spark:3.5.1 (build) | — | Workers Spark |
+| `spark-worker` | meteo-spark:3.5.1 (build) | aucun | Workers Spark |
 | `postgres` | postgres:15-alpine | 5432 | Méta-données Airflow |
-| `airflow-init` | meteo-airflow:2.9.3 (build) | — | Migration DB + user admin (one-shot) |
+| `airflow-init` | meteo-airflow:2.9.3 (build) | aucun | Migration DB + user admin (one-shot) |
 | `airflow-webserver` | meteo-airflow:2.9.3 (build) | 8080 | UI Airflow |
-| `airflow-scheduler` | meteo-airflow:2.9.3 (build) | — | Scheduler Airflow |
-| `kafka-producer` | meteo-base (build) | — | Producteur Open-Meteo → Kafka (5 min) |
+| `airflow-scheduler` | meteo-airflow:2.9.3 (build) | aucun | Scheduler Airflow |
+| `kafka-producer` | meteo-base (build) | aucun | Producteur Open-Meteo → Kafka (5 min) |
 | `jupyter` | meteo-jupyter (build) | 8888 | Notebooks (token `meteo`) |
 | `streamlit` | meteo-base (build) | 8501 | Dashboard Gold |
 | `ollama` *(profil genai)* | ollama/ollama | 11434 | LLM local pour les bulletins IA |
@@ -125,7 +125,7 @@ Autres commandes : `./deploy.sh status` · `./deploy.sh logs kafka-producer` ·
 
 ## 4. Sources de données
 
-### 4.1 Batch — NOAA GHCN-D (~6,6 Go visés)
+### 4.1 Batch : NOAA GHCN-D (~6,6 Go visés)
 
 - **URL** : https://www.ncei.noaa.gov/data/global-historical-climatology-network-daily/access/
 - **Format** : CSV par station (100 000+ stations mondiales), valeurs journalières
@@ -141,9 +141,9 @@ Autres commandes : `./deploy.sh status` · `./deploy.sh logs kafka-producer` ·
   stations par taille décroissante jusqu'à atteindre `NOAA_TARGET_GB` (6,6 Go),
   télécharge avec reprise, et dépose les fichiers **bruts** en Bronze.
 - **Mode `--synthetic`** : si NOAA est inaccessible (réseau filtré), le script
-  génère des CSV au même schéma (marche aléatoire saisonnière), parfait pour la démo.
+  génère des CSV au même schéma (marche aléatoire saisonnière), utile pour une démo rapide.
 
-### 4.2 Temps réel — Open-Meteo API
+### 4.2 Temps réel : Open-Meteo API
 
 - **URL** : https://open-meteo.com (sans clé API)
 - **Fréquence** : toutes les 5 minutes (configurable, `POLL_INTERVAL_SECONDS`)
@@ -199,7 +199,7 @@ timestamp, temperature, precipitation, wind_speed, snow, source, dt
 
 ### 🥇 Gold (agrégations / KPIs métier)
 
-`scripts/gold_transform.py` (DAG `dag_gold_aggregate`) — tables Parquet :
+`scripts/gold_transform.py` (DAG `dag_gold_aggregate`) produit les tables Parquet :
 
 | Table | Contenu | Partitionnement |
 |---|---|---|
@@ -295,7 +295,7 @@ dixièmes → °C, validation de schéma, **déduplication**, classification des
 → Nous adaptons la question au domaine météo : nous construisons un **profil météo**
 par station (moyennes climatiques, amplitude thermique, jours de pluie, saisonnalité)
 à partir de l'historique NOAA. Ces indicateurs servent de features au modèle de
-prédiction — l'équivalent du profil client en météorologie.
+prédiction, l'équivalent météo d'un profil client.
 
 **Q : Où est l'historique d'achat dans la météo ?**
 → L'analogue de l'historique d'achat est **l'historique climatique** : les archives

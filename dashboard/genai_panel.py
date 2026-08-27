@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-genai_panel.py — Panneau « Bulletin IA » du dashboard Streamlit.
+genai_panel.py : panneau « Bulletin IA » du dashboard Streamlit.
 =================================================================
 
 Lit le dernier bulletin.json de la table Gold ai_insights et l'affiche
 dans une carte stylisée (bulletin généré par le LLM local via Ollama,
 avec repli « fallback »).
 
-Auteur : Soufiane — Équipe DataLake Météo
+Auteur : Soufiane, équipe DataLake Météo
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ def render_genai_panel(reader) -> None:
     remote_file = f"{_AI_INSIGHTS_DIR}/{latest}/bulletin.json"
     bulletin = _read_bulletin(reader, remote_file)
     if bulletin is None:
-        st.info("Impossible de lire bulletin.json — le fichier est peut-être en cours d'écriture.")
+        st.info("Impossible de lire bulletin.json : le fichier est peut-être en cours d'écriture.")
         return
 
     text = bulletin.get("bulletin", "")

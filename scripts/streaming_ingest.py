@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-streaming_ingest.py — Consommateur Spark Structured Streaming (Kafka → Bronze)
+streaming_ingest.py : consommateur Spark Structured Streaming (Kafka → Bronze)
 ==============================================================================
 Consomme en continu le topic Kafka "meteo-stream" (produit par
 kafka_producer.py) et écrit les messages JSON BRUTS dans Bronze :
@@ -19,7 +19,7 @@ station_id + timestamp).
 Le job s'arrête proprement après --max-runtime secondes (ou sur SIGTERM),
 ce qui permet à Airflow de le relancer régulièrement.
 
-Auteur : Youcef — Équipe DataLake Météo
+Auteur : Youcef, équipe DataLake Météo
 """
 
 from __future__ import annotations
