@@ -1,1 +1,24 @@
+# Fichiers PDF (sujet du TP)
 *.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Données & caches locaux
+data/
+*.part
+
+# Notebooks
+.ipynb_checkpoints/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Docker
+.dockerignore

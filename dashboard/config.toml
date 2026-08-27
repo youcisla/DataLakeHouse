@@ -1,0 +1,22 @@
+# ============================================================
+#  config.toml — Source de vérité de la configuration du dashboard
+#  Dashboard Météo — DataLake (TP Big Data)
+# ============================================================
+
+[hdfs]
+namenode = "namenode"
+webhdfs_port = 9870
+
+[refresh]
+interval_seconds = 30
+
+[theme]
+primaryColor = "#0e7ac4"
+backgroundColor = "#f7f9fc"
+secondaryBackgroundColor = "#e8eef5"
+textColor = "#0f2137"
+font = "sans serif"
+
+[dashboard]
+title = "🌤️ Dashboard Météo — DataLake"
+villes = ["Paris", "Lyon", "Marseille", "Bordeaux", "Lille"]

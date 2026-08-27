@@ -1,0 +1,318 @@
+# ============================================================================
+#  docker-compose.yml — Projet DataLake Météo (TP Big Data)
+#  Cluster : HDFS (namenode + datanode) | Spark (master + worker)
+#            Kafka (zookeeper + broker) | Airflow (postgres + webserver +
+#            scheduler) | Jupyter | Streamlit | Ollama (profil optionnel)
+#
+#  Usage : ./deploy.sh up   (ou)   docker compose --env-file docker/.env \
+#          -f docker/docker-compose.yml up -d --build
+# ============================================================================
+
+name: datalake-meteo
+
+x-hadoop-env: &hadoop-env
+  CORE_CONF_fs_defaultFS: hdfs://namenode:${HDFS_RPC_PORT:-9000}
+  CORE_CONF_hadoop_http_staticuser_user: root
+  CORE_CONF_hadoop_proxyuser_root_hosts: "*"
+  CORE_CONF_hadoop_proxyuser_root_groups: "*"
+  HDFS_CONF_dfs_replication: "1"
+  HDFS_CONF_dfs_namenode_datanode_registration_ip__hostname___check: "false"
+
+services:
+  # --------------------------------------------------------------------------
+  # 1. HDFS
+  # --------------------------------------------------------------------------
+  namenode:
+    image: apache/hadoop:3.3.6
+    container_name: namenode
+    hostname: namenode
+    environment: *hadoop-env
+    command:
+      - /bin/bash
+      - -c
+      - |
+        if [ ! -f /hadoop/dfs/name/current/VERSION ]; then
+          echo "Formatage du Namenode (premier démarrage)..."
+          hdfs namenode -format -force -nonInteractive
+        fi
+        hdfs namenode
+    ports:
+      - "9870:9870"   # UI WebHDFS
+      - "${HDFS_RPC_PORT:-9000}:${HDFS_RPC_PORT:-9000}"
+    volumes:
+      - hdfs_namenode_data:/hadoop/dfs/name
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9870/webhdfs/v1/?op=GETFILESTATUS&user.name=root"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 40s
+    networks: [meteo-net]
+
+  datanode:
+    image: apache/hadoop:3.3.6
+    container_name: datanode
+    hostname: datanode
+    environment: *hadoop-env
+    command: ["hdfs", "datanode"]
+    depends_on:
+      namenode:
+        condition: service_healthy
+    volumes:
+      - hdfs_datanode_data:/hadoop/dfs/data
+    networks: [meteo-net]
+
+  # --------------------------------------------------------------------------
+  # 2. Kafka (Zookeeper + Broker)
+  # --------------------------------------------------------------------------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.3
+    container_name: zookeeper
+    hostname: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+    networks: [meteo-net]
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.3
+    container_name: kafka
+    hostname: kafka
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_MESSAGE_MAX_BYTES: 10485760
+    ports:
+      - "9092:9092"
+    depends_on: [zookeeper]
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+    networks: [meteo-net]
+
+  # --------------------------------------------------------------------------
+  # 3. Spark (master + worker)
+  # --------------------------------------------------------------------------
+  spark-master:
+    build:
+      context: ..
+      dockerfile: docker/images/spark/Dockerfile
+    image: meteo-spark:3.5.1
+    container_name: spark-master
+    hostname: spark-master
+    environment:
+      SPARK_MODE: master
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      SPARK_LOCAL_IP: spark-master
+    ports:
+      - "8080:8080"   # UI Spark Master
+      - "7077:7077"   # Standalone
+      - "4040:4040"   # UI du driver Spark (à la demande)
+    volumes:
+      - ..:/opt/project
+      - noaa_cache:/opt/data/noaa
+    networks: [meteo-net]
+
+  spark-worker:
+    build:
+      context: ..
+      dockerfile: docker/images/spark/Dockerfile
+    image: meteo-spark:3.5.1
+    container_name: spark-worker
+    hostname: spark-worker
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_MEMORY: 3g
+      SPARK_WORKER_CORES: 2
+      SPARK_LOCAL_IP: spark-worker
+    depends_on: [spark-master]
+    volumes:
+      - ..:/opt/project
+      - noaa_cache:/opt/data/noaa
+    networks: [meteo-net]
+
+  # --------------------------------------------------------------------------
+  # 4. Airflow (Postgres + init + webserver + scheduler)
+  # --------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: airflow-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-airflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
+      POSTGRES_DB: ${POSTGRES_DB:-airflow}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-airflow}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [meteo-net]
+
+  airflow-init:
+    build:
+      context: ..
+      dockerfile: docker/images/airflow/Dockerfile
+    image: meteo-airflow:2.9.3
+    container_name: airflow-init
+    environment: &airflow-env
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/project/airflow/dags
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow}@postgres:5432/${POSTGRES_DB:-airflow}
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_WEBSERVER_SECRET:-datalake-meteo-secret-tp-2025}
+      AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT: "False"
+      AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077
+      PYTHONPATH: /opt/project/scripts
+    command:
+      - /bin/bash
+      - -c
+      - |
+        airflow db migrate &&
+        (airflow users create --username admin --firstname Admin --lastname Admin \
+          --role Admin --email admin@meteo.local --password admin || true) &&
+        echo "== Airflow initialisé =="
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ..:/opt/project
+    networks: [meteo-net]
+
+  airflow-webserver:
+    image: meteo-airflow:2.9.3
+    container_name: airflow-webserver
+    environment: *airflow-env
+    command: ["airflow", "webserver", "--port", "8080"]
+    ports:
+      - "${AIRFLOW_WEB_PORT:-8080}:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    volumes:
+      - ..:/opt/project
+    networks: [meteo-net]
+
+  airflow-scheduler:
+    image: meteo-airflow:2.9.3
+    container_name: airflow-scheduler
+    environment: *airflow-env
+    command: ["airflow", "scheduler"]
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    volumes:
+      - ..:/opt/project
+    networks: [meteo-net]
+
+  # --------------------------------------------------------------------------
+  # 5. Ingestion temps réel : producteur Kafka (Open-Meteo toutes les 5 min)
+  # --------------------------------------------------------------------------
+  kafka-producer:
+    build:
+      context: ..
+      dockerfile: docker/images/base/Dockerfile
+    image: meteo-base:latest
+    container_name: kafka-producer
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
+      METEO_TOPIC: ${METEO_TOPIC:-meteo-stream}
+      OPENMETEO_CITIES: ${OPENMETEO_CITIES}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-300}
+      BRONZE_QUOTA_GB: ${BRONZE_QUOTA_GB:-10.5}
+      HDFS_NAMENODE: ${HDFS_NAMENODE:-namenode}
+      HDFS_WEBHDFS_PORT: ${HDFS_WEBHDFS_PORT:-9870}
+    command: ["python", "/opt/project/scripts/kafka_producer.py"]
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ..:/opt/project
+    networks: [meteo-net]
+
+  # --------------------------------------------------------------------------
+  # 6. Jupyter (notebooks de visualisation / EDA)
+  # --------------------------------------------------------------------------
+  jupyter:
+    build:
+      context: ..
+      dockerfile: docker/images/jupyter/Dockerfile
+    image: meteo-jupyter:latest
+    container_name: jupyter
+    environment:
+      JUPYTER_TOKEN: ${JUPYTER_TOKEN:-meteo}
+      HDFS_NAMENODE: ${HDFS_NAMENODE:-namenode}
+      HDFS_WEBHDFS_PORT: ${HDFS_WEBHDFS_PORT:-9870}
+    ports:
+      - "8888:8888"
+    volumes:
+      - ..:/home/jovyan/work/projet-meteo
+      - noaa_cache:/opt/data/noaa
+    networks: [meteo-net]
+
+  # --------------------------------------------------------------------------
+  # 7. Dashboard Streamlit (lecture des tables Gold)
+  # --------------------------------------------------------------------------
+  streamlit:
+    build:
+      context: ..
+      dockerfile: docker/images/base/Dockerfile
+    image: meteo-base:latest
+    container_name: streamlit
+    environment:
+      HDFS_NAMENODE: ${HDFS_NAMENODE:-namenode}
+      HDFS_WEBHDFS_PORT: ${HDFS_WEBHDFS_PORT:-9870}
+      STREAMLIT_SERVER_PORT: ${STREAMLIT_PORT:-8501}
+    command: ["streamlit", "run", "/opt/project/dashboard/app.py",
+              "--server.address=0.0.0.0", "--server.port=${STREAMLIT_PORT:-8501}",
+              "--server.headless=true"]
+    ports:
+      - "${STREAMLIT_PORT:-8501}:${STREAMLIT_PORT:-8501}"
+    volumes:
+      - ..:/opt/project
+    networks: [meteo-net]
+
+  # --------------------------------------------------------------------------
+  # 8. Ollama (LLM local pour les bulletins GenAI) — PROFIL OPTIONNEL
+  #    Démarrage : ./deploy.sh up genai  puis  docker exec ollama ollama pull llama3.2:3b
+  # --------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    profiles: ["genai"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks: [meteo-net]
+
+volumes:
+  hdfs_namenode_data:
+  hdfs_datanode_data:
+  zookeeper_data:
+  kafka_data:
+  postgres_data:
+  noaa_cache:
+  ollama_data:
+
+networks:
+  meteo-net:
+    driver: bridge
