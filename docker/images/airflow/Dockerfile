@@ -14,6 +14,13 @@ RUN apt-get update && \
 
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV PATH="$JAVA_HOME/bin:$PATH"
+ENV PYTHONPATH=/opt/project/scripts
+
+# IMPORTANT : l'image officielle Airflow REFUSE pip en root
+# ("You are running pip as root. Please use 'airflow' user to run pip!").
+# On repasse donc sur l'utilisateur airflow AVANT d'installer les paquets
+# Python ; ils atterrissent dans /home/airflow/.local, deja dans le PATH.
+USER airflow
 
 # PySpark + provider Spark (SparkSubmitOperator) + WebHDFS (requests)
 RUN pip install --no-cache-dir \
@@ -22,7 +29,3 @@ RUN pip install --no-cache-dir \
     "requests==2.31.0" \
     "pandas==2.1.4" \
     "pyarrow==15.0.2"
-
-ENV PYTHONPATH=/opt/project/scripts
-
-USER airflow
