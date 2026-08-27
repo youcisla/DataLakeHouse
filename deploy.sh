@@ -12,12 +12,16 @@
 #    ./deploy.sh reset       down + suppression des volumes (données HDFS/Kafka/Postgres)
 #    ./deploy.sh init        (ré)initialise HDFS, le topic Kafka et Airflow
 #    ./deploy.sh trigger     Déclenche manuellement le DAG d'ingestion Bronze
+#
+#  Automatisation complète (recommandé) :  make all
 # ============================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE="docker compose --env-file ${SCRIPT_DIR}/docker/.env -f ${SCRIPT_DIR}/docker/docker-compose.yml"
-NAMENODE_URL="http://namenode:9870"
+# Vu depuis l'hôte, le Namenode est publié sur localhost:9870 (le nom de service
+# "namenode" n'est résoluble que dans le réseau Docker).
+NAMENODE_URL="${NAMENODE_URL:-http://localhost:9870}"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 info()  { echo -e "${GREEN}[deploy]${NC} $*"; }
@@ -47,6 +51,7 @@ wait_http() {
 hdfs_init() {
   info "Création des répertoires HDFS (Bronze / Silver / Gold / modèles / checkpoints)..."
   for dir in /bronze /silver /gold /models /checkpoints \
+             /bronze/meteo/batch/source=meteofrance \
              /bronze/meteo/batch/source=noaa \
              /bronze/meteo/stream/source=openmeteo; do
     curl -sf -X PUT "${NAMENODE_URL}/webhdfs/v1${dir}?op=MKDIRS&user.name=root" >/dev/null \
@@ -128,10 +133,15 @@ case "${1:-up}" in
 
   reset)
     warn "Suppression de TOUT (conteneurs, réseaux, volumes : HDFS, Kafka, Postgres...)"
-    read -r -p "Confirmer ? [y/N] " answer
-    if [ "${answer}" = "y" ] || [ "${answer}" = "Y" ]; then
-      ${COMPOSE} down -v
-      info "Cluster réinitialisé. Relancez : ./deploy.sh up"
+    # FORCE=1 (ou 'make reset') rend l'opération non interactive : le workflow
+    # complet doit pouvoir être rejoué sans aucune saisie humaine.
+    answer="${FORCE:-}"
+    if [ -z "${answer}" ]; then
+      read -r -p "Confirmer ? [y/N] " answer
+    fi
+    if [ "${answer}" = "y" ] || [ "${answer}" = "Y" ] || [ "${answer}" = "1" ]; then
+      ${COMPOSE} down -v --remove-orphans
+      info "Cluster réinitialisé. Relancez : ./deploy.sh up  (ou : make all)"
     else
       info "Annulé."
     fi

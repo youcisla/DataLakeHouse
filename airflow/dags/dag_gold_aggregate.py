@@ -6,6 +6,8 @@ Job Spark qui calcule depuis Silver :
   - daily_aggregates  : KPIs journaliers par ville (temp moy/min/max, précip, vent...)
   - weekly_trends     : tendances hebdomadaires + écart à la semaine précédente
   - extreme_events    : détection d'événements extrêmes (canicule, fortes pluies...)
+  - climate_profile   : profil météo mensuel par ville (normales, amplitude,
+                        jours de pluie, saison) — l'équivalent d'un profil client
 Puis enchaîne :
   - ml/inference.py   : prédictions température J+1 (modèle XGBoost) -> ml_predictions
   - ml/genai_summary.py : bulletin météo généré par LLM (Ollama, fallback si absent)
@@ -51,7 +53,7 @@ with DAG(
             "--end-date", os.environ.get("SILVER_END_DATE", "2025-12-31"),
         ],
         verbose=False,
-        doc_md="Calcule daily_aggregates, weekly_trends et extreme_events "
+        doc_md="Calcule daily_aggregates, weekly_trends, extreme_events et climate_profile "
                "(overwrite dynamique + _SUCCESS).",
     )
 

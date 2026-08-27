@@ -126,6 +126,7 @@ services:
     volumes:
       - ..:/opt/project
       - noaa_cache:/opt/data/noaa
+      - meteofrance_cache:/opt/data/meteofrance
     networks: [meteo-net]
 
   spark-worker:
@@ -145,6 +146,7 @@ services:
     volumes:
       - ..:/opt/project
       - noaa_cache:/opt/data/noaa
+      - meteofrance_cache:/opt/data/meteofrance
     networks: [meteo-net]
 
   # --------------------------------------------------------------------------
@@ -181,6 +183,13 @@ services:
       AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT: "False"
       AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077
       PYTHONPATH: /opt/project/scripts
+      HDFS_NAMENODE: ${HDFS_NAMENODE:-namenode}
+      HDFS_WEBHDFS_PORT: ${HDFS_WEBHDFS_PORT:-9870}
+      BRONZE_QUOTA_GB: ${BRONZE_QUOTA_GB:-10.5}
+      MF_BASE_URL: ${MF_BASE_URL:-https://meteofrance.s3.sbg.io.cloud.ovh.net/data/synchro_ftp/BASE/QUOT}
+      MF_START_YEAR: ${MF_START_YEAR:-2022}
+      MF_END_YEAR: ${MF_END_YEAR:-2026}
+      MF_CACHE_DIR: ${MF_CACHE_DIR:-/opt/data/meteofrance}
     command:
       - /bin/bash
       - -c
@@ -220,6 +229,8 @@ services:
         condition: service_completed_successfully
     volumes:
       - ..:/opt/project
+      - meteofrance_cache:/opt/data/meteofrance
+      - noaa_cache:/opt/data/noaa
     networks: [meteo-net]
 
   # --------------------------------------------------------------------------
@@ -266,6 +277,7 @@ services:
     volumes:
       - ..:/home/jovyan/work/projet-meteo
       - noaa_cache:/opt/data/noaa
+      - meteofrance_cache:/opt/data/meteofrance
     networks: [meteo-net]
 
   # --------------------------------------------------------------------------
@@ -311,6 +323,7 @@ volumes:
   kafka_data:
   postgres_data:
   noaa_cache:
+  meteofrance_cache:
   ollama_data:
 
 networks:
