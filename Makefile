@@ -28,8 +28,8 @@ DCRUN            := $(DC) run --rm --no-deps -T
 #   kafka-producer   image meteo-base : python + pandas + pytest + requests
 #   airflow-webserver  CLI airflow + projet monte
 #   spark-master     lecture HDFS pour la verification finale
-CTL_AIRFLOW      := $(DCX) airflow-webserver python /opt/project/scripts/pipeline_ctl.py
-CTL_BASE         := $(DCRUN) kafka-producer python /opt/project/scripts/pipeline_ctl.py
+CTL_AIRFLOW      := $(DCX) airflow-webserver python3 /opt/project/scripts/pipeline_ctl.py
+CTL_BASE         := $(DCRUN) kafka-producer python3 /opt/project/scripts/pipeline_ctl.py
 
 PROFILE          ?=
 MF_DEPARTMENTS   ?= 75 69 13 33 59
@@ -114,16 +114,16 @@ build:  ## Construit les images du projet
 # =============================================================================
 test:  ## Lance les tests unitaires dans un conteneur - aucun Python requis sur l hote
 	@echo [make] Tests unitaires dans un conteneur - sans Spark, sans HDFS...
-	@$(DCRUN) kafka-producer python -m pytest tests -q
+	@$(DCRUN) kafka-producer python3 -m pytest tests -q
 
 test-local:  ## Variante rapide : tests avec le Python de l hote, si vous en avez un
 	@$(PY) -m pytest tests -q
 
 lint:  ## Compile tous les scripts, DAGs et tests
-	@$(DCRUN) kafka-producer python -m compileall -q scripts airflow/dags tests ml dashboard
+	@$(DCRUN) kafka-producer python3 -m compileall -q scripts airflow/dags tests ml dashboard
 
 dry-run:  ## Plan d ingestion Meteo-France, hors ligne
-	@$(DCRUN) kafka-producer python /opt/project/scripts/meteofrance_ingest.py --dry-run --departments $(MF_DEPARTMENTS)
+	@$(DCRUN) kafka-producer python3 /opt/project/scripts/meteofrance_ingest.py --dry-run --departments $(MF_DEPARTMENTS)
 
 # =============================================================================
 #  3. Cluster
@@ -176,7 +176,7 @@ genai:  ## Bonus : demarre Ollama et telecharge le modele des bulletins IA
 #  5. Verification et exploitation
 # =============================================================================
 verify:  ## Controle sur HDFS que Bronze, Silver et Gold sont complets
-	@$(DCX) spark-master python /opt/project/scripts/verify_medallion.py --allow-empty-stream
+	@$(DCX) spark-master python3 /opt/project/scripts/verify_medallion.py --allow-empty-stream
 
 urls:  ## Rappelle les URLs des interfaces
 	@echo [make] Interfaces du datalake :
