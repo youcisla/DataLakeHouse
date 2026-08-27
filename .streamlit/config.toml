@@ -1,0 +1,12 @@
+# ============================================================
+#  .streamlit/config.toml : thème natif Streamlit du Dashboard Météo
+#  (miroir de dashboard/config.toml, pour que tout le style Streamlit
+#   applique la même palette météo, pas seulement le fond de page)
+# ============================================================
+
+[theme]
+primaryColor = "#0e7ac4"
+backgroundColor = "#f7f9fc"
+secondaryBackgroundColor = "#e8eef5"
+textColor = "#0f2137"
+font = "sans serif"
