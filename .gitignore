@@ -8,8 +8,8 @@ __pycache__/
 .venv/
 venv/
 
-# Données & caches locaux
-data/
+# Données & caches locaux (racine uniquement : web/public/data/ DOIT être commité)
+/data/
 *.part
 
 # Notebooks
