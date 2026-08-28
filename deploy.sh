@@ -61,7 +61,7 @@ hdfs_init() {
 
 kafka_init() {
   info "Création du topic Kafka '${METEO_TOPIC:-meteo-stream}' (si absent)..."
-  ${COMPOSE} exec -T kafka kafka-topics --bootstrap-server kafka:9092 \
+  "${COMPOSE[@]}" exec -T kafka kafka-topics --bootstrap-server kafka:9092 \
     --create --if-not-exists \
     --topic "${METEO_TOPIC:-meteo-stream}" --partitions 3 --replication-factor 1 \
     >/dev/null && info "  Topic OK"
@@ -69,11 +69,11 @@ kafka_init() {
 
 airflow_init() {
   info "Attente de l'initialisation Airflow (migration DB + user admin)..."
-  ${COMPOSE} ps airflow-init >/dev/null 2>&1 || true
+  "${COMPOSE[@]}" ps airflow-init >/dev/null 2>&1 || true
   # airflow-init s'exécute une fois ; on attend la fin de son conteneur
   local status
   for i in $(seq 1 60); do
-    status="$(${COMPOSE} ps -a --format '{{.State}}' airflow-init 2>/dev/null || true)"
+    status="$("${COMPOSE[@]}" ps -a --format '{{.State}}' airflow-init 2>/dev/null || true)"
     if [ "${status}" = "exited" ]; then
       info "Airflow initialisé (admin / admin)."
       return 0
@@ -95,7 +95,7 @@ case "${1:-up}" in
       EXTRA_PROFILE="--profile genai"
       warn "Profil GenAI activé : Ollama sera démarré (pensez à : docker exec ollama ollama pull llama3.2:3b)"
     fi
-    ${COMPOSE} ${EXTRA_PROFILE} up -d --build
+    "${COMPOSE[@]}" ${EXTRA_PROFILE} up -d --build
     wait_http "http://localhost:9870/webhdfs/v1/?op=GETFILESTATUS&user.name=root" "Namenode (HDFS)"
     hdfs_init
     kafka_init
@@ -114,21 +114,21 @@ case "${1:-up}" in
     ;;
 
   status)
-    ${COMPOSE} ps
+    "${COMPOSE[@]}" ps
     ;;
 
   logs)
-    ${COMPOSE} logs -f --tail=100 "${2:-airflow-scheduler}"
+    "${COMPOSE[@]}" logs -f --tail=100 "${2:-airflow-scheduler}"
     ;;
 
   stop)
     info "Arrêt des conteneurs (les volumes sont conservés)..."
-    ${COMPOSE} stop
+    "${COMPOSE[@]}" stop
     ;;
 
   down)
     info "Arrêt et suppression des conteneurs + réseaux (volumes conservés)..."
-    ${COMPOSE} down
+    "${COMPOSE[@]}" down
     ;;
 
   reset)
@@ -155,7 +155,7 @@ case "${1:-up}" in
 
   trigger)
     info "Déclenchement du DAG dag_bronze_ingest..."
-    ${COMPOSE} exec -T airflow-webserver airflow dags trigger dag_bronze_ingest
+    "${COMPOSE[@]}" exec -T airflow-webserver airflow dags trigger dag_bronze_ingest
     info "DAG déclenché. Suivez-le sur http://localhost:8080"
     ;;
 
