@@ -8,7 +8,6 @@ dashboard/
 /data/
 docker/
 ml/
-"ML(SARA)"/
 scripts/
 tests/
 notebooks/

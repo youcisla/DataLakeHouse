@@ -473,9 +473,6 @@ Résultat : `/gold/meteo/ai_insights/dt=.../bulletin.json`.
   - Panneau **ML** (`ml_panel.py`) : prévisions vs réalité, erreurs, confiance ;
   - Panneau **IA** (`genai_panel.py`) : bulletin météo du jour.
   - Lecture HDFS **sans client HDFS** : WebHDFS REST (`dashboard/gold_reader.py`).
-- **`ML(SARA)/`** : module ML & GenAI autonome de Sara (`train_model.py`, `predict.py`,
-  `genai_bulletin.py`) avec son guide `README_ML_GENAI.md` et le compte-rendu
-  `TP_DataLake_DataLakehouse.docx`.
 
 ---
 
@@ -579,7 +576,6 @@ projet-meteo/
 │   ├── dag_silver_transform.py     # DAG 3 : Bronze → Silver
 │   ├── dag_gold_aggregate.py       # DAG 4 : Silver → Gold + ML + GenAI
 │   └── dag_ml_retrain.py           # DAG 5 : réentraînement hebdo
-├── ML(SARA)/                       # module ML & GenAI autonome de Sara (+ .docx)
 ├── tests/
 │   ├── conftest.py                 # rend scripts/ importable
 │   ├── test_transform.py           # fonctions pures (sans Spark)
