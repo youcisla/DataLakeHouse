@@ -30,6 +30,7 @@ import pytest
 
 import checkpoint
 import gold_transform
+import kafka_producer
 import meteofrance_ingest as mf
 import pipeline_ctl
 import silver_transform
@@ -837,3 +838,126 @@ def test_inference_skips_cleanly_without_a_model(monkeypatch, tmp_path):
     # Un modele versionne est reconnu.
     fake_hdfs.hdfs_list = lambda path: ["temperature_predictor_v3"]
     assert inference.model_available() is True
+
+
+# ===========================================================================
+# ROBUSTESSE : la source temps reel ne doit jamais inventer de donnees
+# ===========================================================================
+
+def test_missing_measurement_stays_null_never_zero():
+    """
+    LA regression a ne jamais reintroduire.
+
+    L'ancienne version remplacait une mesure absente par 0.0 — valeur
+    parfaitement plausible pour une temperature. Rien n'echouait, mais les
+    moyennes Gold etaient tirees vers zero et le modele ML apprenait sur des
+    valeurs inventees : un succes silencieux avec des donnees fausses.
+    """
+    checked = kafka_producer.validate_measurements({
+        "temperature_2m": None, "wind_speed_10m": None, "precipitation": None,
+    })
+    for key in ("temperature_2m", "wind_speed_10m", "precipitation"):
+        assert checked[key] is None, f"{key} ne doit JAMAIS devenir 0.0"
+        assert checked[key] != 0.0
+
+
+def test_valid_measurements_pass_through_untouched():
+    source = {"temperature_2m": 21.5, "wind_speed_10m": 0.0, "precipitation": 0.0,
+              "wind_direction_10m": 180.0, "weather_code": 3}
+    checked = kafka_producer.validate_measurements(source)
+    assert checked == source
+    # Fonction pure : l'entree n'est pas modifiee.
+    assert source["temperature_2m"] == 21.5
+    # 0.0 est une VRAIE mesure (pas de pluie, vent nul) et doit etre conservee.
+    assert checked["precipitation"] == 0.0
+
+
+def test_physically_impossible_values_are_rejected():
+    """Une anomalie de la source ne doit pas contaminer les agregats."""
+    cases = {
+        "temperature_2m": [-9999, 999, float("nan"), "n/a", None],
+        "wind_speed_10m": [-5, 5000, "vent"],
+        "wind_direction_10m": [-10, 720],
+        "precipitation": [-3, 99999],
+    }
+    for key, values in cases.items():
+        for value in values:
+            assert kafka_producer.validate_measurements({key: value})[key] is None, (
+                f"{key}={value!r} aurait du etre rejete")
+
+    # Les bornes elles-memes restent acceptees.
+    low, high = kafka_producer.MEASUREMENT_BOUNDS["temperature_2m"]
+    assert kafka_producer.validate_measurements({"temperature_2m": low})["temperature_2m"] == low
+    assert kafka_producer.validate_measurements({"temperature_2m": high})["temperature_2m"] == high
+
+
+def test_unknown_keys_survive_a_contract_change():
+    """Le contrat Open-Meteo peut evoluer : on ne jette pas ce qu'on ignore."""
+    checked = kafka_producer.validate_measurements({"humidite_relative": 80, "temperature_2m": 12.0})
+    assert checked["humidite_relative"] == 80
+    assert checked["temperature_2m"] == 12.0
+
+
+def test_empty_records_are_not_published():
+    """Un releve sans aucune mesure ne doit pas grossir le Bronze."""
+    assert kafka_producer.has_usable_measurement(
+        {"temperature": None, "windspeed": None, "precipitation": None}) is False
+    # Une seule mesure suffit a rendre le releve utile.
+    assert kafka_producer.has_usable_measurement({"temperature": 12.0}) is True
+    assert kafka_producer.has_usable_measurement({"windspeed": 3.0}) is True
+    assert kafka_producer.has_usable_measurement({"precipitation": 0.0}) is True
+
+
+def test_producer_module_imports_without_kafka_or_hdfs():
+    """
+    Les dependances lourdes sont importees DANS les fonctions.
+
+    C'est la convention du projet (cf. silver_transform) : sans elle, ces
+    fonctions pures ne seraient testables ni ici, ni en CI.
+    """
+    source = Path(__file__).resolve().parent.parent / "scripts" / "kafka_producer.py"
+    header = source.read_text(encoding="utf-8").split("def load_cities")[0]
+    for forbidden in ("\nimport requests", "\nfrom kafka import", "\nimport hdfs_utils"):
+        assert forbidden not in header, f"import global interdit : {forbidden.strip()}"
+
+
+# ===========================================================================
+# ROBUSTESSE : garde-fous d'orchestration
+# ===========================================================================
+
+def _dag_sources():
+    dags = Path(__file__).resolve().parent.parent / "airflow" / "dags"
+    return {p.name: p.read_text(encoding="utf-8") for p in sorted(dags.glob("dag_*.py"))}
+
+
+def test_every_dag_bounds_its_tasks_in_time():
+    """
+    Sans execution_timeout, une tache bloquee reste 'running' indefiniment :
+    ni succes, ni echec, donc aucune alerte et un DAG qui ne finit jamais.
+    """
+    for name, source in _dag_sources().items():
+        assert "execution_timeout" in source, f"{name} : aucune borne de duree"
+        assert "retries" in source, f"{name} : aucune politique de reprise"
+
+
+def test_every_dag_forbids_concurrent_runs():
+    """
+    Deux executions simultanees ecriraient les memes partitions et les memes
+    _SUCCESS : Parquet corrompu et checkpoints incoherents.
+    """
+    for name, source in _dag_sources().items():
+        assert "max_active_runs=1" in source, f"{name} : executions concurrentes possibles"
+
+
+def test_long_running_services_restart_but_one_shots_do_not():
+    """Un crash transitoire ne doit pas laisser le cluster amoindri en silence."""
+    yaml = pytest.importorskip("yaml", reason="PyYAML absent hors conteneur")
+    compose = Path(__file__).resolve().parent.parent / "docker" / "docker-compose.yml"
+    services = yaml.safe_load(compose.read_text(encoding="utf-8"))["services"]
+
+    for name in ("namenode", "datanode", "kafka", "zookeeper", "postgres",
+                 "spark-master", "spark-worker", "airflow-webserver", "airflow-scheduler"):
+        assert services[name].get("restart") == "unless-stopped", f"{name} ne redemarre pas"
+
+    # airflow-init est one-shot : le relancer en boucle rejouerait la migration.
+    assert "restart" not in services["airflow-init"]

@@ -32,6 +32,9 @@ DEFAULT_ARGS = {
     "email_on_failure": False,
     "retries": 2,
     "retry_delay": timedelta(minutes=3),
+    # Gold + inference + bulletin : au-dela, la tache est tuee et relancee plutot que
+    # de rester bloquee sans fin (ni succes ni echec).
+    "execution_timeout": timedelta(hours=2),
     "start_date": datetime(2024, 1, 1),
 }
 
@@ -41,6 +44,7 @@ with DAG(
     default_args=DEFAULT_ARGS,
     schedule_interval=None,          # déclenché par dag_silver_transform ou manuellement
     catchup=False,
+    max_active_runs=1,
     tags=["gold", "agregation", "ml", "genai"],
 ) as dag:
 
