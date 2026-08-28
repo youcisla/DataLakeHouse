@@ -52,8 +52,8 @@ PY               ?= python3
 .NOTPARALLEL:
 
 .PHONY: help all re doctor build test test-local lint dry-run up wait-services \
-        init topic unpause pipeline wait trigger bronze silver gold ml genai \
-        predict showcase export-web web-install web-dev web-build \
+        init topic unpause pipeline wait trigger bronze silver gold genai \
+        showcase export-web web-install web-dev web-build \
         checkpoints checkpoints-reset verify urls status ps logs stop down reset clean
 
 help:  ## Affiche l aide - instantane, aucun conteneur demarre
@@ -106,7 +106,7 @@ help:  ## Affiche l aide - instantane, aucun conteneur demarre
 # =============================================================================
 #  LA CIBLE PRINCIPALE : tout le TP, de bout en bout, sans intervention
 # =============================================================================
-all: doctor build test up wait-services init topic unpause pipeline ml predict $(GENAI_STEP) verify showcase export-web urls  ## TOUT : cluster, Bronze, Silver, Gold, ML, predictions, verification, vitrine en ligne. Relancable : reprend ou il s est arrete.
+all: doctor build test up wait-services init topic unpause pipeline $(GENAI_STEP) verify showcase export-web urls  ## TOUT : cluster, Bronze, Silver, Gold, ML, predictions, verification, vitrine en ligne. Relancable : reprend ou il s est arrete.
 	@echo [make] Workflow termine : Medallion, ML et predictions en place et verifies.
 
 re: reset all  ## Reset complet, volumes compris, puis rejoue tout
