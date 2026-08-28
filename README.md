@@ -643,6 +643,8 @@ et l'entraînement l'ignorent correctement. Un test verrouille cette régression
 | **Ressources** | Quota Bronze atteint | `quota_reached` | producteur et DAG s'arrêtent |
 | | HDFS muet pour un checkpoint | exception capturée | avertissement, le traitement continue |
 | | Tâche bloquée sans fin | `execution_timeout` | tuée puis relancée (`retries=2`) |
+| **Démarrage** | Service dépendant démarré trop tôt | `depends_on: condition: service_healthy` | attend la **disponibilité**, pas le simple démarrage |
+| | Sonde basée sur un outil JVM | — | sondes TCP (`/dev/tcp`), en millisecondes |
 | **Cycle de vie** | Crash transitoire d'un service | Docker | `restart: unless-stopped` (sauf one-shots) |
 | | Aucun modèle sous `/models` | `model_available` | inférence sautée, code 0 |
 | | Interruption en cours d'ingestion | checkpoints | reprise à l'unité près |
@@ -726,6 +728,16 @@ interruption.
   sans cela la tâche `inference_ml` échouait, `bulletin_genai` était sauté et tout
   le DAG Gold passait en `failed`. Même philosophie que le bulletin IA, qui a
   toujours eu un fallback pour ne jamais casser le pipeline.
+- **Ordonnancement au démarrage** : `depends_on: [x]` (forme courte) n'attend que
+  le *démarrage* du conteneur, jamais sa disponibilité. Kafka sortait ainsi au bout
+  de ses 18 s par défaut (`Timed out waiting for connection while in state:
+  CONNECTING`) parce que Zookeeper n'acceptait pas encore de connexion. Toutes les
+  dépendances utilisent désormais la forme longue avec `condition:`, et **un test
+  interdit le retour de la forme courte**.
+- **Sondes de disponibilité** : jamais d'outil JVM (`kafka-topics`, `hdfs`). Leur
+  seul démarrage dépasse souvent le `timeout` de la sonde, qui échoue alors même
+  service parfaitement sain. Toutes les sondes du projet sont des tests TCP bash,
+  et un test le verrouille.
 - **Ollama** est optionnel (profil `genai`) : sans lui, le bulletin fallback
   (règles) est généré et le DAG ne casse pas.
 - Le connecteur **spark-sql-kafka** (`--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1`)

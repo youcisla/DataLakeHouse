@@ -940,3 +940,54 @@ def test_long_running_services_restart_but_one_shots_do_not():
         assert services[name].get("restart") == "unless-stopped", f"{name} ne redemarre pas"
 
     assert "restart" not in services["airflow-init"]
+
+
+def test_every_dependency_waits_for_readiness_not_just_startup():
+    """
+    La forme courte ``depends_on: [x]`` n'attend que le DEMARRAGE du conteneur.
+
+    C'est ce qui faisait sortir Kafka : Zookeeper etait "demarre" mais
+    n'acceptait pas encore de connexion, et Kafka abandonnait au bout de ses
+    18 s par defaut. Toute dependance doit donc porter une condition explicite,
+    et tout service dont on depend doit savoir dire quand il est pret.
+    """
+    yaml = pytest.importorskip("yaml", reason="PyYAML absent hors conteneur")
+    compose = Path(__file__).resolve().parent.parent / "docker" / "docker-compose.yml"
+    services = yaml.safe_load(compose.read_text(encoding="utf-8"))["services"]
+
+    depended_on = set()
+    for name, spec in services.items():
+        dependencies = spec.get("depends_on")
+        if not dependencies:
+            continue
+        assert isinstance(dependencies, dict), (
+            f"{name} : depends_on en forme courte — n'attend pas la disponibilite")
+        for target, rule in dependencies.items():
+            assert rule.get("condition"), f"{name} -> {target} : condition absente"
+            depended_on.add((target, rule["condition"]))
+
+    for target, condition in depended_on:
+        if condition == "service_healthy":
+            assert services[target].get("healthcheck"), (
+                f"{target} : attendu 'healthy' mais aucun healthcheck defini")
+
+
+def test_healthchecks_never_depend_on_a_jvm_tool():
+    """
+    Une sonde qui lance un outil JVM (kafka-topics, hdfs) met souvent plus de
+    temps a demarrer que son propre timeout : elle echoue alors meme service
+    parfaitement sain. Les sondes du projet sont des tests TCP.
+    """
+    yaml = pytest.importorskip("yaml", reason="PyYAML absent hors conteneur")
+    compose = Path(__file__).resolve().parent.parent / "docker" / "docker-compose.yml"
+    services = yaml.safe_load(compose.read_text(encoding="utf-8"))["services"]
+
+    for name, spec in services.items():
+        check = spec.get("healthcheck")
+        if not check:
+            continue
+        command = " ".join(check["test"])
+        for jvm_tool in ("kafka-topics", "hdfs ", "spark-submit", "zookeeper-shell"):
+            assert jvm_tool not in command, f"{name} : sonde basee sur {jvm_tool}"
+        # Le timeout doit laisser de la marge a la sonde elle-meme.
+        assert check.get("timeout"), f"{name} : timeout de sonde non defini"
