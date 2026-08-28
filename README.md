@@ -346,11 +346,35 @@ Un DAG interrompu **peut être relancé sans dupliquer** :
 | **Checkpoints par unité de travail** | `/checkpoints/medallion/<étape>.json` | commit **après chaque** lot / partition : une interruption ne coûte jamais plus que l'unité en cours |
 | **Checkpoint Kafka** | `/checkpoints/kafka_to_bronze` | le streaming reprend aux offsets exacts (exactly-once côté lecture) |
 | **Overwrite dynamique** des partitions | Silver + Gold | relancer réécrit seulement les partitions présentes dans l'input |
-| `--only-new` | DAG Silver **et Gold** | saute les `dt` déjà marquées `_SUCCESS` **et** déjà présentes dans les checkpoints |
+| `--only-new` | DAG Silver **et Gold** | saute les `dt` déjà marquées `_SUCCESS` **et** déjà présentes dans les checkpoints (une seule lecture native `globStatus`) |
 | Dédup `(station_id, timestamp)` | Silver | filet de sécurité même si un doublon arrive quand même |
 | `_SUCCESS` par partition dt | Silver/Gold | les couches aval savent exactement quoi traiter |
 
 ---
+
+### Accès HDFS : natif, jamais REST, dans les jobs Spark
+
+Un job Spark **parle déjà HDFS nativement** : le faire passer par WebHDFS ajoute
+un aller-retour HTTP là où la JVM répond gratuitement. Sur quatre ans de données
+(~1460 partitions `dt`), l'ancienne version de `write_silver` coûtait :
+
+| Opération | Avant | Après |
+|---|---|---|
+| Calcul du pipeline Silver | **2×** (pas de cache avant `collect()`) | 1× (`persist`) |
+| Lecture des partitions existantes | ~1460 appels WebHDFS | **1** `globStatus` natif |
+| Dépôt des `_SUCCESS` | ~4400 appels (exists + mkdirs + create) | JVM locale, 0 HTTP |
+| Checkpoints | ~2900 appels — chacun relisant/réécrivant **tout** l'état | **1** lecture + **1** écriture (`mark_many`) |
+
+Soit environ **9000 aller-retours HTTP** remplacés par une poignée d'appels JVM,
+et la moitié du travail Spark supprimée. Les trois jobs (`silver_transform`,
+`gold_transform`, `streaming_ingest`) n'importent plus `hdfs_utils` du tout —
+**un test l'interdit**. `hdfs_utils` reste le bon outil là où il n'y a pas de JVM
+Spark : ingestion batch, dashboard Streamlit, `pipeline_ctl`.
+
+Le job de streaming souffrait du même mal en pire : sa boucle filtrait le
+micro-batch **une fois par heure**, recalculant le parsing JSON `N+2` fois toutes
+les 30 secondes. Un `partitionBy("year","month","day","hour")` produit exactement
+la même arborescence Bronze en **une seule écriture**.
 
 ### Checkpoints : reprise fine (`scripts/checkpoint.py`)
 
@@ -728,6 +752,14 @@ interruption.
   sans cela la tâche `inference_ml` échouait, `bulletin_genai` était sauté et tout
   le DAG Gold passait en `failed`. Même philosophie que le bulletin IA, qui a
   toujours eu un fallback pour ne jamais casser le pipeline.
+- **Variables d'environnement ignorées par l'image** : `SPARK_MODE`,
+  `SPARK_MASTER_URL`, `SPARK_WORKER_CORES`… sont des conventions de l'image
+  **bitnami/spark**. L'image **officielle `apache/spark`** les ignore purement et
+  simplement : sans `command:` explicite, **aucun processus Master ne démarrait** et
+  rien n'écoutait sur 7077 — alors que le conteneur affichait `Started`. Tous les
+  jobs `spark-submit` (Silver, Gold, ML, streaming) auraient échoué à se connecter
+  au cluster. Le Master et le Worker sont désormais lancés explicitement via
+  `spark-class`, et un test interdit le retour des variables bitnami.
 - **Ordonnancement au démarrage** : `depends_on: [x]` (forme courte) n'attend que
   le *démarrage* du conteneur, jamais sa disponibilité. Kafka sortait ainsi au bout
   de ses 18 s par défaut (`Timed out waiting for connection while in state:

@@ -438,48 +438,46 @@ def gold_key(table: str, partition: str) -> str:
     return f"{table}:{partition}"
 
 
-def write_daily_aggregates(daily: "DataFrame") -> None:
-    """Écrit daily_aggregates (partition dt) + _SUCCESS par dt et racine."""
+def write_daily_aggregates(spark: "SparkSession", daily: "DataFrame") -> None:
+    """
+    Écrit daily_aggregates (partition dt) + _SUCCESS par dt.
+
+    Marqueurs deposes nativement (FileSystem Hadoop de la JVM) et checkpoint
+    ecrit en un seul aller-retour : la boucle precedente faisait, par
+    partition, un appel WebHDFS ET une relecture-reecriture complete de l'etat.
+    """
     import checkpoint
-    import hdfs_utils
+    import silver_transform
 
     path = f"{hdfs_base()}/gold/meteo/daily_aggregates"
     dts = [r.dt.strftime("%Y-%m-%d") for r in daily.select("dt").distinct().orderBy("dt").collect()]
     _write_parquet_dynamic(daily, path, ["dt"])
-    for d in dts:
-        hdfs_utils.write_success(f"/gold/meteo/daily_aggregates/dt={d}")
-        checkpoint.mark_done(checkpoint.STAGE_GOLD, gold_key("daily_aggregates", d))
-    hdfs_utils.write_success("/gold/meteo/daily_aggregates")
-    logger.info("daily_aggregates écrit (%d partition(s) dt).", len(dts))
+
+    written = silver_transform.write_success_markers(spark, path, dts)
+    checkpoint.mark_many(checkpoint.STAGE_GOLD,
+                         [gold_key("daily_aggregates", d) for d in dts])
+    logger.info("daily_aggregates ecrit (%d partition(s) dt, %d marqueur(s)).",
+                len(dts), written)
 
 
 def write_weekly_trends(weekly: "DataFrame") -> None:
     """Écrit weekly_trends (partition year/week) + _SUCCESS racine."""
-    import hdfs_utils
-
     path = f"{hdfs_base()}/gold/meteo/weekly_trends"
     _write_parquet_dynamic(weekly, path, ["year", "week"])
-    hdfs_utils.write_success("/gold/meteo/weekly_trends")
     logger.info("weekly_trends écrit.")
 
 
 def write_extreme_events(extreme: "DataFrame") -> None:
     """Écrit extreme_events (partition dt) + _SUCCESS racine."""
-    import hdfs_utils
-
     path = f"{hdfs_base()}/gold/meteo/extreme_events"
     _write_parquet_dynamic(extreme, path, ["dt"])
-    hdfs_utils.write_success("/gold/meteo/extreme_events")
     logger.info("extreme_events écrit.")
 
 
 def write_climate_profile(profile: "DataFrame") -> None:
     """Écrit climate_profile (partition month) + _SUCCESS racine."""
-    import hdfs_utils
-
     path = f"{hdfs_base()}/gold/meteo/climate_profile"
     _write_parquet_dynamic(profile, path, ["month"])
-    hdfs_utils.write_success("/gold/meteo/climate_profile")
     logger.info("climate_profile écrit.")
 
 
@@ -512,14 +510,16 @@ def run(args: argparse.Namespace) -> None:
             # Ne recalculer que les dt dont daily_aggregates n'est pas deja
             # marque : sans cela, Gold recalculait TOUT a chaque execution.
             import checkpoint
-            import hdfs_utils
+            import silver_transform
 
             all_dts = [r.dt.strftime("%Y-%m-%d")
                        for r in silver.select("dt").distinct().orderBy("dt").collect()]
+            # Un seul globStatus natif au lieu d'un appel WebHDFS par partition.
+            already = silver_transform.existing_partitions(
+                spark, f"{hdfs_base()}/gold/meteo/daily_aggregates")
+            done = set(checkpoint.load(checkpoint.STAGE_GOLD).get("done", []))
             todo = [d for d in all_dts
-                    if not checkpoint.is_done(checkpoint.STAGE_GOLD,
-                                              gold_key("daily_aggregates", d))
-                    and not hdfs_utils.has_success(f"/gold/meteo/daily_aggregates/dt={d}")]
+                    if gold_key("daily_aggregates", d) not in done and d not in already]
             skipped = len(all_dts) - len(todo)
             if skipped:
                 logger.info("Gold --only-new : %d partition(s) deja calculee(s), ignoree(s).",
@@ -540,7 +540,7 @@ def run(args: argparse.Namespace) -> None:
 
         run = checkpoint.run_id("gold")
         try:
-            write_daily_aggregates(daily)
+            write_daily_aggregates(spark, daily)
             write_weekly_trends(compute_weekly_trends(full_daily))
             write_extreme_events(compute_extreme_events(full_daily, get_thresholds()))
             write_climate_profile(compute_climate_profile(full_daily))

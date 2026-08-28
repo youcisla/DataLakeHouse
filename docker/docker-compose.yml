@@ -178,16 +178,28 @@ services:
     restart: unless-stopped
     hostname: spark-master
     environment:
-      SPARK_MODE: master
-      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
-      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      # ATTENTION : SPARK_MODE / SPARK_MASTER_URL sont des conventions de
+      # l'image bitnami/spark. L'image OFFICIELLE apache/spark les IGNORE :
+      # sans "command:" explicite, aucun processus Master ne demarrait et
+      # rien n'ecoutait sur 7077. Les conteneurs paraissaient "Started", mais
+      # tout job spark-submit aurait echoue a se connecter au cluster.
+      SPARK_NO_DAEMONIZE: "true"
       SPARK_LOCAL_IP: spark-master
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.master.Master
+      - --host
+      - spark-master
+      - --port
+      - "7077"
+      - --webui-port
+      - "8080"
     ports:
       - "8081:8080"   # UI Spark Master (8080 est réservé à Airflow)
       - "7077:7077"   # Standalone
       - "4040:4040"   # UI du driver Spark (à la demande)
     healthcheck:
-      test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/7077'"]
+      test: ["CMD-SHELL", "python3 -c \"import socket; socket.create_connection(('spark-master', 7077), 5).close()\""]
       interval: 10s
       timeout: 10s
       retries: 30
@@ -206,11 +218,18 @@ services:
     restart: unless-stopped
     hostname: spark-worker
     environment:
-      SPARK_MODE: worker
-      SPARK_MASTER_URL: spark://spark-master:7077
-      SPARK_WORKER_MEMORY: 3g
-      SPARK_WORKER_CORES: 2
+      SPARK_NO_DAEMONIZE: "true"
       SPARK_LOCAL_IP: spark-worker
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.worker.Worker
+      - spark://spark-master:7077
+      - --cores
+      - "2"
+      - --memory
+      - 3g
+      - --webui-port
+      - "8081"
     # Forme longue : sans elle le worker boucle en "Failed to connect to master"
     # tant que le master n'ecoute pas encore sur 7077.
     depends_on:
