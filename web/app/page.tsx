@@ -1,313 +1,283 @@
-import { ChartOrTable, Empty, Legend, Status, ThemeToggle, Tile } from "@/components/Primitives";
-import { CityBars, CityLines, PredictionChart } from "@/components/Charts";
+"use client";
+
+import { useMemo, useState } from "react";
+import { ThemeToggle, Status, Empty } from "@/components/Primitives";
+import { SeriesChart, GroupedBars, ClimateHeatmap, PredictionScatter, WeeklyDelta, Donut, Sparkline } from "@/components/Charts";
+import FranceMap from "@/components/FranceMap";
+import { climateInsight, extremesInsight, mlInsight, rainInsight, tempInsight, weeklyInsight } from "@/lib/insights";
+import { CITY_ORDER, cityColor } from "@/lib/palette";
 import {
-  climate, cityColor, daily, extremes, formatDate, formatNumber, hasData,
-  mapPoints, meta, orderedCities, pivotByCity, predictions, weekly, bulletin,
+  climate, daily, extremes, formatDate, formatNumber, hasData, mapPoints,
+  meta, orderedCities, pivotByCity, predictions, weekly, bulletin,
 } from "@/lib/data";
 
-export default function Page() {
-  const cities = orderedCities(daily);
-  const colors = Object.fromEntries(cities.map((c) => [c, cityColor(c)]));
-  const legendItems = cities.map((c) => ({ label: c, color: cityColor(c) }));
+type Metric = "temp_avg" | "temp_min" | "temp_max";
+const METRICS: { id: Metric; label: string; unit: string }[] = [
+  { id: "temp_avg", label: "Moyenne", unit: " °C" },
+  { id: "temp_min", label: "Min", unit: " °C" },
+  { id: "temp_max", label: "Max", unit: " °C" },
+];
+const PERIODS: { label: string; days: number | null }[] = [
+  { label: "14 j", days: 14 },
+  { label: "30 j", days: 30 },
+  { label: "90 j", days: 90 },
+  { label: "Tout", days: null },
+];
+const MONTHS = ["jan", "fév", "mar", "avr", "mai", "juin", "juil", "aoû", "sep", "oct", "nov", "déc"];
 
-  const tempSeries = pivotByCity(daily, "temp_avg");
-  const rainSeries = pivotByCity(daily, "precip_sum").slice(-14).map((row) => ({
-    ...row, label: String(row.dt).slice(5),
+export default function Page() {
+  const allCities = orderedCities(daily);
+  const [active, setActive] = useState<string[]>(allCities);
+  const [metric, setMetric] = useState<Metric>("temp_avg");
+  const [period, setPeriod] = useState<number | null>(30);
+
+  const cities = useMemo(() => CITY_ORDER.filter((c) => active.includes(c)), [active]);
+
+  const filtered = useMemo(() => {
+    const inCity = new Set(active);
+    let rows = daily.filter((r) => inCity.has(r.city));
+    if (period) {
+      const cut = new Date(Math.max(...rows.map((r) => +new Date(r.dt))));
+      cut.setDate(cut.getDate() - period);
+      const iso = cut.toISOString().slice(0, 10);
+      rows = rows.filter((r) => r.dt >= iso);
+    }
+    return rows;
+  }, [active, period]);
+
+  const unit = METRICS.find((m) => m.id === metric)!.unit;
+  const tempSeries = pivotByCity(filtered, metric).map((r) => ({ ...r, label: String(r.dt).slice(5) }));
+  const rainSeries = pivotByCity(filtered, "precip_sum").slice(-14).map((r) => ({ ...r, label: String(r.dt).slice(5) }));
+
+  const cityIndex = new Map<string, number>(cities.map((c, i) => [c, i] as [string, number]));
+  const heatData: [number, number, number][] = [];
+  for (const row of climate) {
+    if (!active.includes(row.city)) continue;
+    const ci = cityIndex.get(row.city);
+    if (ci !== undefined && row.temp_normal !== null) heatData.push([row.month - 1, ci, row.temp_normal]);
+  }
+
+  const predData = predictions
+    .filter((p) => active.includes(p.city) && p.temp_actual !== null && p.temp_predicted !== null)
+    .map((p) => ({ city: p.city, actual: p.temp_actual as number, predicted: p.temp_predicted as number }));
+
+  const latestWeek = new Map<string, (typeof weekly)[number]>();
+  for (const w of weekly) {
+    if (!active.includes(w.city)) continue;
+    const key = w.year + "-" + w.week;
+    const cur = latestWeek.get(key);
+    if (!cur) latestWeek.set(key, w);
+  }
+  const deltaData = [...latestWeek.values()]
+    .filter((w) => w.temp_vs_prev_week !== null)
+    .map((w) => ({ label: w.city, value: w.temp_vs_prev_week as number }))
+    .sort((a, b) => a.value - b.value);
+
+  const eventCounts = new Map<string, number>();
+  for (const e of extremes) eventCounts.set(e.event_type, (eventCounts.get(e.event_type) ?? 0) + 1);
+  const donutData = [...eventCounts.entries()].map(([name, value]) => ({
+    name: name.replace(/_/g, " "), value,
+    color: { canicule: "#ef4444", fortes_pluies: "#3b82f6", vents_violents: "#8b5cf6", vague_de_froid: "#22d3ee" }[name],
   }));
 
-  const recentExtremes = [...extremes]
-    .sort((a, b) => String(b.dt).localeCompare(String(a.dt)))
-    .slice(0, 12);
-
-  const predByDate = new Map<string, Record<string, unknown>>();
-  for (const p of predictions) {
-    const entry = predByDate.get(p.dt) ?? { dt: p.dt };
-    if (typeof p.temp_actual === "number") entry["Réel"] = p.temp_actual;
-    if (typeof p.temp_predicted === "number") entry["Prédit"] = p.temp_predicted;
-    predByDate.set(p.dt, entry);
-  }
-  const predSeries = [...predByDate.values()].sort((a, b) =>
-    String(a.dt).localeCompare(String(b.dt)));
-
-  const errors = predictions
-    .map((p) => p.error_abs)
-    .filter((e): e is number => typeof e === "number");
-  const mae = errors.length ? errors.reduce((a, b) => a + b, 0) / errors.length : null;
-
-  const climateByCity = new Map<string, typeof climate>();
-  for (const row of climate) {
-    climateByCity.set(row.city, [...(climateByCity.get(row.city) ?? []), row]);
-  }
-  const monthlySeries = Array.from({ length: 12 }, (_, i) => {
-    const month = i + 1;
-    const entry: Record<string, unknown> = {
-      label: ["jan", "fév", "mar", "avr", "mai", "juin",
-        "juil", "août", "sep", "oct", "nov", "déc"][i],
-    };
-    for (const city of cities) {
-      const row = (climateByCity.get(city) ?? []).find((r) => r.month === month);
-      entry[city] = row?.temp_normal ?? null;
-    }
-    return entry;
+  const tempSpark = pivotByCity(daily, "temp_avg").slice(-30).map((r) => {
+    const vals = cities.map((c) => r[c]).filter((v): v is number => typeof v === "number");
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
   });
+  const rainSpark = pivotByCity(daily, "precip_sum").slice(-30).map((r) => {
+    const vals = cities.map((c) => r[c]).filter((v): v is number => typeof v === "number");
+    return vals.length ? vals.reduce((a, b) => a + b, 0) : null;
+  });
+
+  function toggleCity(city: string) {
+    setActive((cur) => cur.includes(city) ? cur.filter((c) => c !== city) : [...cur, city]);
+  }
+  function focusCity(city: string | null) {
+    setActive(city ? [city] : allCities);
+  }
+
 
   return (
     <main className="wrap">
-      <header className="masthead">
-        <div>
-          <h1>DataLake Météo</h1>
-          <p>
-            Architecture Bronze → Silver → Gold · {meta.source_batch} + {meta.source_stream}
-          </p>
+      <nav className="nav">
+        <div className="brand">DataLake <b>Météo</b></div>
+        <div className="navlinks">
+          {["carte", "temp", "climat", "ml", "extrêmes"].map((s) => (
+            <a key={s} href={"#" + s}>{s}</a>
+          ))}
         </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <span className="chip">
-            {meta.generated_at
-              ? `Instantané du ${formatDate(meta.generated_at)}`
-              : "Aucun export"}
-          </span>
+        <div className="navright">
+          <span className="chip">{formatDate(meta.generated_at) ? "Snap " + formatDate(meta.generated_at) : "Aucun export"}</span>
           <ThemeToggle />
+        </div>
+      </nav>
+
+      <header className="hero">
+        <p className="kicker">Bronze · Silver · Gold</p>
+        <h1>Le climat de <em>cinq villes</em> françaises, en un coup d’œil.</h1>
+        <p className="sub">{meta.source_batch} · {meta.source_stream}</p>
+        <div className="badges">
+          <span className="badge bz">Bronze</span>
+          <span className="badge si">Silver</span>
+          <span className="badge go">Gold</span>
+          <span className="badge">XGBoost</span>
         </div>
       </header>
 
-      {!hasData ? (
-        <section><Empty what="agrégats quotidiens" /></section>
+      {!hasData ? <section><Empty what="agrégats quotidiens" /></section> : null}
+
+      <section className="kpis">
+        <div className="card kpi">
+          <div className="klabel">Température moyenne</div>
+          <div className="kvalue">{formatNumber(meta.summary.temp_avg)}<span className="kunit"> °C</span></div>
+          <Sparkline data={tempSpark} color="#eb6834" />
+          <div className="knote">dernier jour, 5 villes</div>
+        </div>
+        <div className="card kpi">
+          <div className="klabel">Cumul pluie</div>
+          <div className="kvalue">{formatNumber(meta.summary.precip_total)}<span className="kunit"> mm</span></div>
+          <Sparkline data={rainSpark} color="#3987e5" />
+          <div className="knote">dernier jour</div>
+        </div>
+        <div className="card kpi">
+          <div className="klabel">Villes suivies</div>
+          <div className="kvalue">{meta.summary.cities}<span className="kunit"></span></div>
+          <div className="knote">batch + flux temps réel</div>
+        </div>
+        <div className="card kpi">
+          <div className="klabel">Observations</div>
+          <div className="kvalue">{meta.summary.observations.toLocaleString("fr-FR")}<span className="kunit"></span></div>
+          <div className="knote">relevés agrégés en Gold</div>
+        </div>
+        <div className="card kpi">
+          <div className="klabel">Événements extrêmes</div>
+          <div className="kvalue">{extremes.length}<span className="kunit"></span></div>
+          <div className="knote">canicule, pluies, vents, froid</div>
+        </div>
+      </section>
+
+      <section className="controls">
+        <div className="controlgroup">
+          {PERIODS.map((p) => (
+            <button key={p.label} className={"chipbtn" + (period === p.days ? " on" : "")} onClick={() => setPeriod(p.days)}>{p.label}</button>
+          ))}
+        </div>
+        <div className="controlgroup">
+          {CITY_ORDER.map((c) => (
+            <button key={c} className={"chipbtn dot" + (active.includes(c) ? " on" : "")} onClick={() => toggleCity(c)}>
+              <span className="dot" style={{ background: cityColor(c) }} />{c}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section id="carte">
+        <h2><span className="num">01</span> Carte de France</h2>
+        <blockquote>Où fait-il le plus chaud en ce moment ?</blockquote>
+        <div className="duo mapduo">
+          <div className="card"><FranceMap points={mapPoints} selected={active.length === 1 ? active[0] : null} onSelect={focusCity} /></div>
+          <div className="card">
+            <div className="maplist">
+              {mapPoints.map((p) => (
+                <button key={p.city} className={"row" + (active.length === 1 && active[0] === p.city ? " on" : "")} onClick={() => focusCity(p.city)}>
+                  <span className="swatch" style={{ background: cityColor(p.city) }} />
+                  <span className="cname">{p.city}</span>
+                  <span className="cval">{formatNumber(p.temperature)} °C</span>
+                </button>
+              ))}
+            </div>
+            <p className="takeaway">{tempInsight(filtered)}</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="temp">
+        <h2><span className="num">02</span> Températures</h2>
+        <blockquote>Comment la température évolue-t-elle sur la fenêtre ?</blockquote>
+        <div className="seg">
+          {METRICS.map((m) => (
+            <button key={m.id} className={"segbtn" + (metric === m.id ? " on" : "")} onClick={() => setMetric(m.id)}>{m.label}</button>
+          ))}
+        </div>
+        <div className="card">
+          {tempSeries.length ? <SeriesChart data={tempSeries} cities={cities} unit={unit} height={380} /> : <Empty what="températures" />}
+        </div>
+        <p className="takeaway">{tempInsight(filtered)}</p>
+      </section>
+
+      <section id="pluie">
+        <h2><span className="num">03</span> Précipitations</h2>
+        <blockquote>Quels jours ont été les plus arrosés ?</blockquote>
+        <div className="card">
+          {rainSeries.length ? <GroupedBars data={rainSeries} cities={cities} height={300} /> : <Empty what="précipitations" />}
+        </div>
+        <p className="takeaway">{rainInsight(filtered)}</p>
+      </section>
+
+      <section id="climat">
+        <h2><span className="num">04</span> Profil climatique mensuel</h2>
+        <blockquote>Quelle est la normale de température de chaque ville, mois par mois ?</blockquote>
+        <div className="card">
+          {heatData.length ? <ClimateHeatmap data={heatData} months={MONTHS} cities={cities} height={340} /> : <Empty what="profil climatique" />}
+        </div>
+        <p className="takeaway">{climateInsight(climate)}</p>
+      </section>
+
+      <section id="ml">
+        <h2><span className="num">05</span> Prédictions ML (J+1)</h2>
+        <blockquote>Le modèle XGBoost prédit-il bien la température du lendemain ?</blockquote>
+        <div className="card">
+          {predData.length ? <PredictionScatter data={predData} height={340} /> : <Empty what="prédictions" />}
+        </div>
+        <p className="takeaway">{mlInsight(predictions)}</p>
+      </section>
+
+      <section id="tendance">
+        <h2><span className="num">06</span> Tendances hebdomadaires</h2>
+        <blockquote>Quelle ville se réchauffe ou se refroidit le plus d’une semaine à l’autre ?</blockquote>
+        <div className="card">
+          {deltaData.length ? <WeeklyDelta data={deltaData} height={320} /> : <Empty what="tendances hebdomadaires" />}
+        </div>
+        <p className="takeaway">{weeklyInsight(weekly)}</p>
+      </section>
+
+      <section id="extrêmes">
+        <h2><span className="num">07</span> Événements extrêmes</h2>
+        <blockquote>Quels seuils ont été franchis, et à quelle sévérité ?</blockquote>
+        <div className="extgrid">
+          {donutData.length ? (
+            <div className="card"><Donut data={donutData} height={300} /></div>
+          ) : null}
+          <div className="card">
+            {extremes.length ? (
+              <div className="evlist">
+                {[...extremes].sort((a, b) => String(b.dt).localeCompare(String(a.dt))).slice(0, 10).map((e, i) => (
+                  <div key={i} className="ev">
+                    <Status level={e.severity}>{e.severity === "extreme" ? "Extrême" : "Alerte"}</Status>
+                    <div className="evbody">
+                      <b>{e.city}</b> · {e.event_type.replace(/_/g, " ")} · {e.dt}
+                      <div className="evdetail">{e.detail}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : <Empty what="événements extrêmes" />}
+          </div>
+        </div>
+        <p className="takeaway">{extremesInsight(extremes)}</p>
+      </section>
+
+      {bulletin?.bulletin ? (
+        <section id="bulletin">
+          <h2><span className="num">08</span> Bulletin météo généré</h2>
+          <blockquote>Une synthèse rédigée, générée depuis les tables Gold.</blockquote>
+          <div className="card bulletin">{bulletin.bulletin}</div>
+        </section>
       ) : null}
 
-      {/* ---------------- KPIs ---------------- */}
-      <section>
-        <h2>Vue d’ensemble</h2>
-        <p className="sub">
-          Dernier jour couvert : {formatDate(meta.summary.last_day)} · fenêtre exportée{" "}
-          {meta.window_days} jours.
-        </p>
-        <div className="grid kpi">
-          <Tile label="Villes suivies" value={String(meta.summary.cities || cities.length)}
-            note="Batch Météo-France + flux Open-Meteo" />
-          <Tile label="Température moyenne" value={formatNumber(meta.summary.temp_avg)}
-            unit=" °C" note="Moyenne des villes, dernier jour" />
-          <Tile label="Précipitations" value={formatNumber(meta.summary.precip_total)}
-            unit=" mm" note="Cumul du dernier jour" />
-          <Tile label="Observations" value={meta.summary.observations.toLocaleString("fr-FR")}
-            note="Relevés agrégés en Gold" />
-          <Tile label="Événements extrêmes" value={String(extremes.length)}
-            note="Canicule, pluies, vents, froid" />
-        </div>
-      </section>
-
-      {/* ---------------- Températures ---------------- */}
-      <section>
-        <h2>Températures moyennes</h2>
-        <p className="sub">
-          Une couleur par ville, fixe : un filtre ne repeint jamais les séries restantes.
-        </p>
-        <div className="card">
-          {tempSeries.length ? (
-            <>
-              <Legend items={legendItems} />
-              <ChartOrTable
-                chart={<CityLines data={tempSeries} cities={cities} colors={colors} />}
-                table={
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Date</th>
-                        {cities.map((c) => <th key={c} className="num">{c} (°C)</th>)}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tempSeries.slice(-30).reverse().map((row) => (
-                        <tr key={String(row.dt)}>
-                          <td>{String(row.dt)}</td>
-                          {cities.map((c) => (
-                            <td key={c} className="num">
-                              {formatNumber(row[c] as number | null)}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                }
-              />
-            </>
-          ) : <Empty what="températures" />}
-        </div>
-      </section>
-
-      {/* ---------------- Pluie + carte ---------------- */}
-      <section>
-        <h2>Précipitations et relevés du jour</h2>
-        <p className="sub">Cumuls des 14 derniers jours, et dernière température par ville.</p>
-        <div className="grid two">
-          <div className="card">
-            {rainSeries.length ? (
-              <>
-                <Legend items={legendItems} />
-                <CityBars data={rainSeries} cities={cities} colors={colors} />
-              </>
-            ) : <Empty what="précipitations" />}
-          </div>
-          <div className="card">
-            {mapPoints.length ? (
-              <div className="scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Ville</th><th className="num">Température</th><th>Position</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {mapPoints.map((point) => (
-                      <tr key={point.city}>
-                        <td>
-                          <span className="swatch" aria-hidden="true"
-                            style={{ background: cityColor(point.city), display: "inline-block",
-                              marginRight: 8, verticalAlign: "middle" }} />
-                          {point.city}
-                        </td>
-                        <td className="num">{formatNumber(point.temperature)} °C</td>
-                        <td style={{ color: "var(--text-muted)" }}>
-                          {point.lat.toFixed(2)}, {point.lon.toFixed(2)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : <Empty what="relevés du jour" />}
-          </div>
-        </div>
-      </section>
-
-      {/* ---------------- Profil climatique ---------------- */}
-      <section>
-        <h2>Profil climatique mensuel</h2>
-        <p className="sub">
-          Normales de température par ville : l’équivalent météo d’un profil client,
-          construit depuis les archives.
-        </p>
-        <div className="card">
-          {climate.length ? (
-            <>
-              <Legend items={legendItems} />
-              <CityBars data={monthlySeries} cities={cities} colors={colors} unit=" °C" />
-            </>
-          ) : <Empty what="profil climatique" />}
-        </div>
-      </section>
-
-      {/* ---------------- Événements extrêmes ---------------- */}
-      <section>
-        <h2>Événements extrêmes</h2>
-        <p className="sub">
-          Seuils configurables : canicule, fortes pluies, vents violents, vague de froid.
-        </p>
-        <div className="card scroll">
-          {recentExtremes.length ? (
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th><th>Ville</th><th>Type</th><th>Sévérité</th>
-                  <th className="num">Valeur</th><th className="num">Seuil</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentExtremes.map((event, i) => (
-                  <tr key={`${event.dt}-${event.city}-${event.event_type}-${i}`}>
-                    <td>{event.dt}</td>
-                    <td>{event.city}</td>
-                    <td>{event.event_type.replace(/_/g, " ")}</td>
-                    <td>
-                      <Status level={event.severity}>
-                        {event.severity === "extreme" ? "Extrême" : "Alerte"}
-                      </Status>
-                    </td>
-                    <td className="num">{formatNumber(event.value)}</td>
-                    <td className="num">{formatNumber(event.threshold)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : <Empty what="événements extrêmes" />}
-        </div>
-      </section>
-
-      {/* ---------------- ML ---------------- */}
-      <section>
-        <h2>Prédictions à J+1 (XGBoost)</h2>
-        <p className="sub">
-          Température prédite contre température réellement observée.
-          {mae !== null ? ` Erreur absolue moyenne : ${mae.toFixed(2)} °C.` : ""}
-        </p>
-        <div className="card">
-          {predSeries.length ? (
-            <PredictionChart data={predSeries} />
-          ) : (
-            <Empty what="prédictions" />
-          )}
-        </div>
-      </section>
-
-      {/* ---------------- Bulletin IA ---------------- */}
-      <section>
-        <h2>Bulletin météo généré</h2>
-        <p className="sub">Produit par un LLM local (Ollama), avec repli déterministe.</p>
-        <div className="card">
-          {bulletin?.bulletin ? (
-            <p style={{ margin: 0, whiteSpace: "pre-wrap", color: "var(--text-secondary)" }}>
-              {bulletin.bulletin}
-            </p>
-          ) : <Empty what="bulletin" />}
-        </div>
-      </section>
-
-      {/* ---------------- Tendances hebdo ---------------- */}
-      <section>
-        <h2>Tendances hebdomadaires</h2>
-        <p className="sub">Pente de régression et écart à la semaine précédente.</p>
-        <div className="card scroll">
-          {weekly.length ? (
-            <table>
-              <thead>
-                <tr>
-                  <th>Semaine</th><th>Ville</th><th className="num">T° moy.</th>
-                  <th className="num">Pente</th><th className="num">Δ / sem. préc.</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...weekly].sort((a, b) => (b.year - a.year) || (b.week - a.week))
-                  .slice(0, 15).map((row, i) => (
-                    <tr key={`${row.year}-${row.week}-${row.city}-${i}`}>
-                      <td>{row.year} · S{String(row.week).padStart(2, "0")}</td>
-                      <td>{row.city}</td>
-                      <td className="num">{formatNumber(row.temp_avg)} °C</td>
-                      <td className="num">{formatNumber(row.trend_slope, 2)}</td>
-                      <td className="num" style={{
-                        color: (row.temp_vs_prev_week ?? 0) > 0
-                          ? "var(--text-primary)" : "var(--text-secondary)",
-                      }}>
-                        {row.temp_vs_prev_week !== null && row.temp_vs_prev_week !== undefined
-                          ? `${row.temp_vs_prev_week > 0 ? "+" : ""}${formatNumber(row.temp_vs_prev_week)}`
-                          : "-"}
-                      </td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
-          ) : <Empty what="tendances hebdomadaires" />}
-        </div>
-      </section>
-
       <footer>
-        <p style={{ margin: 0 }}>
-          Instantané des tables Gold : les données voyagent avec le site, aucune API
-          n’est appelée à l’exécution. Régénérer : <code>make export-web</code>.
-        </p>
-        <p style={{ margin: "6px 0 0" }}>
-          Lignes exportées :{" "}
-          {Object.entries(meta.rows).map(([k, v]) => `${k} ${v}`).join(" · ") || "-"}
-        </p>
+        <p>Instantané des tables Gold : les données voyagent avec le site, aucune API à l’exécution. Régénérer : <code>make export-web</code>.</p>
+        <p className="fmuted">Lignes exportées : {Object.entries(meta.rows).map(([k, v]) => k + " " + v).join(" · ")} · {formatDate(meta.generated_at)}</p>
       </footer>
     </main>
   );
