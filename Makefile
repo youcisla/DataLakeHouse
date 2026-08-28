@@ -197,10 +197,10 @@ export-web:  ## Exporte les tables Gold en JSON pour le site Next.js
 web-install:  ## Installe les dependances du site - dans un conteneur node
 	@$(DC) --profile web run --rm web npm install
 
-web-dev:  ## Lance le site sur http://localhost:3000 - dans un conteneur node
+web-dev: web-install  ## Lance le site sur http://localhost:3000 - dans un conteneur node
 	@$(DC) --profile web run --rm --service-ports web npm run dev
 
-web-build:  ## Build de production du site - verifie avant de deployer
+web-build: web-install  ## Build de production du site - verifie avant de deployer
 	@$(DC) --profile web run --rm web npm run build
 
 checkpoints:  ## Affiche l etat de reprise des trois etapes

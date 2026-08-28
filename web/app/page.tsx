@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { ThemeToggle, Status, Empty } from "@/components/Primitives";
+import { WeatherIcon, eventIcon, tempIcon } from "@/components/Icons";
 import { SeriesChart, GroupedBars, ClimateHeatmap, PredictionScatter, WeeklyDelta, Donut, Sparkline } from "@/components/Charts";
 import FranceMap from "@/components/FranceMap";
 import { climateInsight, extremesInsight, mlInsight, rainInsight, tempInsight, weeklyInsight } from "@/lib/insights";
@@ -123,6 +124,28 @@ export default function Page() {
           <span className="badge">XGBoost</span>
         </div>
       </header>
+
+      <section className="nowstrip" aria-label="Météo actuelle par ville">
+        {CITY_ORDER.map((city) => {
+          const rows = daily.filter((r) => r.city === city).sort((a, b) => a.dt.localeCompare(b.dt));
+          const latest = rows[rows.length - 1];
+          const spark = rows.slice(-7).map((r) => r.temp_avg);
+          return (
+            <div key={city} className="nowcard" onClick={() => focusCity(city)}
+              style={{ opacity: active.includes(city) ? 1 : 0.4 }}>
+              <div className="top" style={{ color: cityColor(city) }}>
+                <WeatherIcon kind={tempIcon(latest?.temp_avg ?? null, latest?.precip_sum ?? null)} size={18} />
+                <span style={{ color: "var(--text-secondary)" }}>{city}</span>
+              </div>
+              <div className="ntemp">{formatNumber(latest?.temp_avg)}°</div>
+              <div className="nnote">
+                {latest?.precip_sum != null ? formatNumber(latest.precip_sum) + " mm de pluie" : "pas de donnée"}
+              </div>
+              <div className="nspark"><Sparkline data={spark} color={cityColor(city)} height={36} /></div>
+            </div>
+          );
+        })}
+      </section>
 
       {!hasData ? <section><Empty what="agrégats quotidiens" /></section> : null}
 
@@ -253,6 +276,9 @@ export default function Page() {
               <div className="evlist">
                 {[...extremes].sort((a, b) => String(b.dt).localeCompare(String(a.dt))).slice(0, 10).map((e, i) => (
                   <div key={i} className="ev">
+                    <span style={{ color: "var(--accent)", display: "inline-flex", marginTop: 2 }}>
+                      <WeatherIcon kind={eventIcon(e.event_type)} size={20} />
+                    </span>
                     <Status level={e.severity}>{e.severity === "extreme" ? "Extrême" : "Alerte"}</Status>
                     <div className="evbody">
                       <b>{e.city}</b> · {e.event_type.replace(/_/g, " ")} · {e.dt}
