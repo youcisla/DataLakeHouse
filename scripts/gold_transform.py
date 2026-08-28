@@ -462,25 +462,31 @@ def write_daily_aggregates(spark: "SparkSession", daily: "DataFrame") -> None:
                 len(years), written)
 
 
-def write_weekly_trends(weekly: "DataFrame") -> None:
+def write_weekly_trends(spark: "SparkSession", weekly: "DataFrame") -> None:
     """Écrit weekly_trends (partition year) + _SUCCESS racine."""
+    import silver_transform
     path = f"{hdfs_base()}/gold/meteo/weekly_trends"
     _write_parquet_dynamic(weekly, path, ["year"])
+    silver_transform.write_marker_paths(spark, [path])
     logger.info("weekly_trends écrit.")
 
 
-def write_extreme_events(extreme: "DataFrame") -> None:
+def write_extreme_events(spark: "SparkSession", extreme: "DataFrame") -> None:
     """Écrit extreme_events (partition year) + _SUCCESS racine."""
+    import silver_transform
     from pyspark.sql import functions as F
     path = f"{hdfs_base()}/gold/meteo/extreme_events"
     _write_parquet_dynamic(extreme.withColumn("year", F.year("dt")), path, ["year"])
+    silver_transform.write_marker_paths(spark, [path])
     logger.info("extreme_events écrit.")
 
 
-def write_climate_profile(profile: "DataFrame") -> None:
+def write_climate_profile(spark: "SparkSession", profile: "DataFrame") -> None:
     """Écrit climate_profile (partition month) + _SUCCESS racine."""
+    import silver_transform
     path = f"{hdfs_base()}/gold/meteo/climate_profile"
     _write_parquet_dynamic(profile, path, ["month"])
+    silver_transform.write_marker_paths(spark, [path])
     logger.info("climate_profile écrit.")
 
 
@@ -544,9 +550,9 @@ def run(args: argparse.Namespace) -> None:
         run = checkpoint.run_id("gold")
         try:
             write_daily_aggregates(spark, daily)
-            write_weekly_trends(compute_weekly_trends(full_daily))
-            write_extreme_events(compute_extreme_events(full_daily, get_thresholds()))
-            write_climate_profile(compute_climate_profile(full_daily))
+            write_weekly_trends(spark, compute_weekly_trends(full_daily))
+            write_extreme_events(spark, compute_extreme_events(full_daily, get_thresholds()))
+            write_climate_profile(spark, compute_climate_profile(full_daily))
             checkpoint.record_run(checkpoint.STAGE_GOLD, run, "success", tables=4)
         except Exception:
             checkpoint.record_run(checkpoint.STAGE_GOLD, run, "failed")
