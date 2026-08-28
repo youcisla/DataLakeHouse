@@ -34,6 +34,8 @@ CTL_BASE         := $(DCRUN) kafka-producer python3 /opt/project/scripts/pipelin
 PROFILE          ?=
 MF_DEPARTMENTS   ?= 75 69 13 33 59
 PIPELINE_TIMEOUT ?= 2400
+# Profondeur d historique exportee vers le site.
+WEB_WINDOW_DAYS   ?= 180
 METEO_TOPIC      ?= meteo-stream
 SVC              ?= airflow-scheduler
 # FORCE=1 rejoue les etapes deja marquees terminees dans les checkpoints.
@@ -51,7 +53,8 @@ PY               ?= python3
 
 .PHONY: help all re doctor build test test-local lint dry-run up wait-services \
         init topic unpause pipeline wait trigger bronze silver gold ml genai \
-        predict checkpoints checkpoints-reset verify urls status ps logs stop down reset clean
+        predict showcase export-web web-install web-dev web-build \
+        checkpoints checkpoints-reset verify urls status ps logs stop down reset clean
 
 help:  ## Affiche l aide - instantane, aucun conteneur demarre
 	@echo DataLake Meteo - automatisation du TP, Bronze puis Silver puis Gold
@@ -88,6 +91,8 @@ help:  ## Affiche l aide - instantane, aucun conteneur demarre
 	@echo   make genai - Bonus : Ollama et bulletins IA
 	@echo   make checkpoints - Etat de reprise des trois etapes
 	@echo   make checkpoints-reset - Vide les checkpoints
+	@echo   make export-web - Exporte les tables Gold en JSON pour le site
+	@echo   make web-dev - Site en local sur http://localhost:3000
 	@echo   make verify - Controle les trois couches sur HDFS
 	@echo   make showcase - Exporte les sorties Gold vers la vitrine en ligne
 	@echo   make urls - Rappelle les interfaces
@@ -101,7 +106,7 @@ help:  ## Affiche l aide - instantane, aucun conteneur demarre
 # =============================================================================
 #  LA CIBLE PRINCIPALE : tout le TP, de bout en bout, sans intervention
 # =============================================================================
-all: doctor build test up wait-services init topic unpause pipeline $(GENAI_STEP) verify showcase urls  ## TOUT : cluster, Bronze, Silver, Gold, ML, predictions, verification, vitrine en ligne. Relancable : reprend ou il s est arrete.
+all: doctor build test up wait-services init topic unpause pipeline ml predict $(GENAI_STEP) verify showcase export-web urls  ## TOUT : cluster, Bronze, Silver, Gold, ML, predictions, verification, vitrine en ligne. Relancable : reprend ou il s est arrete.
 	@echo [make] Workflow termine : Medallion, ML et predictions en place et verifies.
 
 re: reset all  ## Reset complet, volumes compris, puis rejoue tout
@@ -181,6 +186,18 @@ genai:  ## Bonus : demarre Ollama et telecharge le modele des bulletins IA
 # =============================================================================
 #  5. Verification et exploitation
 # =============================================================================
+export-web:  ## Exporte les tables Gold en JSON pour le site Next.js
+	@$(DCX) spark-master python3 /opt/project/scripts/export_web.py --days $(WEB_WINDOW_DAYS)
+
+web-install:  ## Installe les dependances du site - dans un conteneur node
+	@$(DC) --profile web run --rm web npm install
+
+web-dev:  ## Lance le site sur http://localhost:3000 - dans un conteneur node
+	@$(DC) --profile web run --rm --service-ports web npm run dev
+
+web-build:  ## Build de production du site - verifie avant de deployer
+	@$(DC) --profile web run --rm web npm run build
+
 checkpoints:  ## Affiche l etat de reprise des trois etapes
 	@$(DCX) spark-master python3 /opt/project/scripts/pipeline_ctl.py checkpoints
 

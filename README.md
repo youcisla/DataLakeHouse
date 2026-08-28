@@ -627,7 +627,65 @@ streamlit run dashboard/app.py --server.port 8501
 
 ---
 
-## 15. Résilience : analyse des modes de défaillance
+## 15. Interface web (Next.js sur Vercel)
+
+`web/` est une application **Next.js 14** (App Router, export statique) qui
+restitue *toutes* les tables Gold : KPIs, températures par ville, précipitations,
+profil climatique mensuel, événements extrêmes, prédictions J+1 vs réel,
+bulletin IA et tendances hebdomadaires.
+
+### La contrainte qui dicte l'architecture
+
+**Vercel n'a aucun accès réseau au cluster** : HDFS, Kafka et Spark tournent sur
+`localhost`, derrière Docker. Un site déployé ne peut pas interroger
+`localhost:9870`. Les données **voyagent donc avec le site** :
+
+```
+tables Gold ──(make export-web)──> web/public/data/*.json ──(build)──> site statique
+```
+
+- le site est **toujours en ligne**, même cluster éteint — y compris depuis le
+  téléphone du jury ;
+- il affiche un **instantané**, dont la date est visible dans l'en-tête : personne
+  ne peut le confondre avec du temps réel ;
+- rafraîchir = `make export-web` puis `git push` (Vercel redéploie).
+
+### Déployer
+
+```bash
+make export-web     # tables Gold -> web/public/data/*.json
+make web-install    # npm install, DANS un conteneur node (une fois)
+make web-dev        # http://localhost:3000
+make web-build      # vérifie le build avant de pousser
+```
+
+Comme le reste du projet, **Node tourne dans un conteneur** : rien à installer
+sur la machine. `node_modules` vit dans un volume Docker nommé et non sur le
+montage Windows — y écrire des dizaines de milliers de petits fichiers prend
+des minutes au lieu de quelques secondes.
+
+> Sous **PowerShell**, `&&` n'est pas un séparateur valide (avant PowerShell 7) :
+> lancez les commandes une par une, ou séparez-les par `;`.
+
+Sur vercel.com : **New Project** → importer le dépôt → **Root Directory : `web`**.
+Aucune variable d'environnement : le site ne contacte aucun service à l'exécution.
+
+### Choix de visualisation
+
+La palette catégorielle est **validée par outil**, pas à l'œil : séparation
+daltonisme et contraste vérifiés sur les deux surfaces (claire et sombre). Une
+couleur par ville dans un **ordre fixe** — la couleur suit la ville, jamais son
+rang, donc un filtre ne repeint jamais les séries restantes. Trois teintes passent
+sous 3:1 sur fond clair : la règle de secours impose alors une **bascule tableau**,
+présente sur les graphiques concernés. Les couleurs de statut (alerte / extrême)
+sont réservées et toujours accompagnées d'une pastille **et** d'un libellé : la
+couleur ne porte jamais le sens seule. Thème clair/sombre au choix du visiteur,
+le bouton l'emportant sur le réglage système dans les deux sens.
+
+> `site/` (page statique d'une seule page, cible `make showcase`) est conservée :
+> c'est la vitrine légère. `web/` est l'interface complète.
+
+## 16. Résilience : analyse des modes de défaillance
 
 **Le principe.** Un cluster distribué aura des pannes : un datanode tombe, une
 API expire, un conteneur est tué par l'OOM killer. L'objectif n'est donc pas
@@ -704,7 +762,7 @@ d'`execution_timeout` et de `max_active_runs=1` dans chaque DAG, les politiques 
 redémarrage (et leur absence sur les one-shots), et le scénario de reprise après
 interruption.
 
-## 16. Notes & limites
+## 17. Notes & limites
 
 - **Météo-France** : les valeurs manquantes sont des **champs vides** (pas de
   sentinelle numérique) ; les unités sont déjà en °C / mm / m·s⁻¹.
