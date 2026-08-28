@@ -5,7 +5,7 @@
 airflow/
 configs/
 dashboard/
-data/
+/data/
 docker/
 ml/
 "ML(SARA)"/
