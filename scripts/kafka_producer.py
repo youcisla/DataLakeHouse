@@ -142,6 +142,8 @@ def fetch_current(city: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "current": "temperature_2m,wind_speed_10m,wind_direction_10m,precipitation,weather_code",
         "timezone": "UTC",
     }
+    import requests
+
     for attempt in range(1, _RETRIES + 1):
         try:
             resp = requests.get(API_URL, params=params, timeout=_HTTP_TIMEOUT)
@@ -154,7 +156,7 @@ def fetch_current(city: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             # apprendrait sur des valeurs inventées.
             return validate_measurements(current)
         except requests.RequestException as exc:
-            logger.warning("Échec API Open-Meteo pour %s (tentative %d/%d) : %s",
+            logger.warning("Echec API Open-Meteo pour %s (tentative %d/%d) : %s",
                            city["city"], attempt, _RETRIES, exc)
             time.sleep(2 * attempt)
     return None
@@ -166,6 +168,8 @@ def check_quota(quota_gb: float) -> bool:
 
     if quota_gb <= 0:
         return False
+    import hdfs_utils
+
     try:
         return hdfs_utils.quota_reached("/bronze", quota_gb)
     except IOError as exc:
