@@ -28,4 +28,8 @@ RUN pip install --no-cache-dir \
     "apache-airflow-providers-apache-spark==4.7.1" \
     "requests==2.31.0" \
     "pandas==2.1.4" \
-    "pyarrow==15.0.2"
+    "pyarrow==15.0.2" \
+    "numpy==1.26.4" \
+    "scikit-learn==1.3.2" \
+    "xgboost==2.0.3" \
+    "joblib==1.3.2"
