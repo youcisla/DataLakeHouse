@@ -92,9 +92,9 @@ HDFS_DIRS: List[str] = [
     "/bronze/meteo/stream/source=openmeteo",
 ]
 
-#: Les quatre DAGs du projet.
+#: Les cinq DAGs du projet (streaming découplé du batch).
 ALL_DAGS: List[str] = [
-    "dag_bronze_ingest", "dag_silver_transform",
+    "dag_bronze_ingest", "dag_stream_ingest", "dag_silver_transform",
     "dag_gold_aggregate", "dag_ml_retrain",
 ]
 

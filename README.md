@@ -431,7 +431,8 @@ Choix de conception :
 
 | DAG | Fréquence | Déclenchement | Tâches |
 |---|---|---|---|
-| `dag_bronze_ingest` | quotidienne | planifiée ou manuelle | vérif quota → `meteofrance_ingest.py` + `streaming_ingest.py` → déclenche Silver |
+| `dag_bronze_ingest` | quotidienne | planifiée ou manuelle | `meteofrance_ingest.py` (batch) → déclenche Silver |
+| `dag_stream_ingest` | toutes les 10 min | planifiée | `streaming_ingest.py` (Kafka → Bronze) → déclenche Silver |
 | `dag_silver_transform` | sur déclenchement | automatique (après Bronze) ou manuelle | `silver_transform.py` → déclenche Gold |
 | `dag_gold_aggregate` | sur déclenchement | automatique (après Silver) ou manuelle | `gold_transform.py` → entraînement (si besoin) → `inference.py` → `genai_summary.py` |
 | `dag_ml_retrain` | hebdomadaire (lun. 03h00) | planifiée ou manuelle | `feature_engineering.py` → `train_model.py` |
@@ -573,10 +574,11 @@ projet-meteo/
 │   ├── genai_panel.py              # widget bulletin IA
 │   └── config.toml                 # thème + refresh + HDFS
 ├── airflow/dags/
-│   ├── dag_bronze_ingest.py        # DAG 1 : ingestion Bronze
-│   ├── dag_silver_transform.py     # DAG 2 : Bronze → Silver
-│   ├── dag_gold_aggregate.py       # DAG 3 : Silver → Gold + ML + GenAI
-│   └── dag_ml_retrain.py           # DAG 4 : réentraînement hebdo
+│   ├── dag_bronze_ingest.py        # DAG 1 : ingestion batch → Bronze
+│   ├── dag_stream_ingest.py        # DAG 2 : streaming Kafka → Bronze (découplé)
+│   ├── dag_silver_transform.py     # DAG 3 : Bronze → Silver
+│   ├── dag_gold_aggregate.py       # DAG 4 : Silver → Gold + ML + GenAI
+│   └── dag_ml_retrain.py           # DAG 5 : réentraînement hebdo
 ├── ML(SARA)/                       # module ML & GenAI autonome de Sara (+ .docx)
 ├── tests/
 │   ├── conftest.py                 # rend scripts/ importable
