@@ -184,7 +184,7 @@ export default function Page() {
       <section>
         <h2>Profil climatique mensuel</h2>
         <p className="sub">
-          Normales de température par ville — l’équivalent météo d’un profil client,
+          Normales de température par ville : l’équivalent météo d’un profil client,
           construit depuis les archives.
         </p>
         <div className="card">
@@ -289,7 +289,7 @@ export default function Page() {
                       }}>
                         {row.temp_vs_prev_week !== null && row.temp_vs_prev_week !== undefined
                           ? `${row.temp_vs_prev_week > 0 ? "+" : ""}${formatNumber(row.temp_vs_prev_week)}`
-                          : "—"}
+                          : "-"}
                       </td>
                     </tr>
                   ))}
@@ -301,12 +301,12 @@ export default function Page() {
 
       <footer>
         <p style={{ margin: 0 }}>
-          Instantané des tables Gold — les données voyagent avec le site, aucune API
+          Instantané des tables Gold : les données voyagent avec le site, aucune API
           n’est appelée à l’exécution. Régénérer : <code>make export-web</code>.
         </p>
         <p style={{ margin: "6px 0 0" }}>
           Lignes exportées :{" "}
-          {Object.entries(meta.rows).map(([k, v]) => `${k} ${v}`).join(" · ") || "—"}
+          {Object.entries(meta.rows).map(([k, v]) => `${k} ${v}`).join(" · ") || "-"}
         </p>
       </footer>
     </main>

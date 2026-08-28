@@ -366,12 +366,12 @@ un aller-retour HTTP là où la JVM répond gratuitement. Sur quatre ans de donn
 | Calcul du pipeline Silver | **2×** (pas de cache avant `collect()`) | 1× (`persist`) |
 | Lecture des partitions existantes | ~1460 appels WebHDFS | **1** `globStatus` natif |
 | Dépôt des `_SUCCESS` | ~4400 appels (exists + mkdirs + create) | JVM locale, 0 HTTP |
-| Checkpoints | ~2900 appels — chacun relisant/réécrivant **tout** l'état | **1** lecture + **1** écriture (`mark_many`) |
+| Checkpoints | ~2900 appels , chacun relisant/réécrivant **tout** l'état | **1** lecture + **1** écriture (`mark_many`) |
 
 Soit environ **9000 aller-retours HTTP** remplacés par une poignée d'appels JVM,
 et la moitié du travail Spark supprimée. Les trois jobs (`silver_transform`,
-`gold_transform`, `streaming_ingest`) n'importent plus `hdfs_utils` du tout —
-**un test l'interdit**. `hdfs_utils` reste le bon outil là où il n'y a pas de JVM
+`gold_transform`, `streaming_ingest`) n'importent plus `hdfs_utils` du tout.
+**Un test l'interdit**. `hdfs_utils` reste le bon outil là où il n'y a pas de JVM
 Spark : ingestion batch, dashboard Streamlit, `pipeline_ctl`.
 
 Le job de streaming souffrait du même mal en pire : sa boucle filtrait le
@@ -642,7 +642,7 @@ bulletin IA et tendances hebdomadaires.
 tables Gold ──(make export-web)──> web/public/data/*.json ──(build)──> site statique
 ```
 
-- le site est **toujours en ligne**, même cluster éteint — y compris depuis le
+- le site est **toujours en ligne**, même cluster éteint, y compris depuis le
   téléphone du jury ;
 - il affiche un **instantané**, dont la date est visible dans l'en-tête : personne
   ne peut le confondre avec du temps réel ;
@@ -659,7 +659,7 @@ make web-build      # vérifie le build avant de pousser
 
 Comme le reste du projet, **Node tourne dans un conteneur** : rien à installer
 sur la machine. `node_modules` vit dans un volume Docker nommé et non sur le
-montage Windows — y écrire des dizaines de milliers de petits fichiers prend
+montage Windows, car y écrire des dizaines de milliers de petits fichiers prend
 des minutes au lieu de quelques secondes.
 
 > Sous **PowerShell**, `&&` n'est pas un séparateur valide (avant PowerShell 7) :
@@ -672,8 +672,8 @@ l'heuristique de détection ni d'un réglage oublié dans le tableau de bord.
 
 ### Le piège Python à connaître
 
-Vercel cherche un point d'entrée Python — `app.py`, `index.py`, `server.py`,
-`main.py`, `wsgi.py`, `asgi.py` — à la racine du projet **et dans `src/` ou
+Vercel cherche un point d'entrée Python (`app.py`, `index.py`, `server.py`,
+`main.py`, `wsgi.py`, `asgi.py`) à la racine du projet **et dans `src/` ou
 `app/`** ([doc](https://vercel.com/docs/functions/runtimes/python#python-entrypoints)).
 Or l'App Router de Next.js vit précisément dans `web/app/`.
 
@@ -684,14 +684,14 @@ dans `web/`, qui déclencherait la détection d'un framework Python.
 
 **Un test verrouille les deux cas.** Le Python du projet (ingestion, jobs Spark,
 export) ne tourne jamais sur Vercel : il s'exécute dans les conteneurs, et seul
-son *résultat* — les JSON — est déployé. `.vercelignore` exclut d'ailleurs
+son *résultat* (les JSON) est déployé. `.vercelignore` exclut d'ailleurs
 `scripts/`, `ml/`, `docker/` et le reste du dépôt de l'upload.
 
 ### Choix de visualisation
 
 La palette catégorielle est **validée par outil**, pas à l'œil : séparation
 daltonisme et contraste vérifiés sur les deux surfaces (claire et sombre). Une
-couleur par ville dans un **ordre fixe** — la couleur suit la ville, jamais son
+couleur par ville dans un **ordre fixe** : la couleur suit la ville, jamais son
 rang, donc un filtre ne repeint jamais les séries restantes. Trois teintes passent
 sous 3:1 sur fond clair : la règle de secours impose alors une **bascule tableau**,
 présente sur les graphiques concernés. Les couleurs de statut (alerte / extrême)
@@ -742,7 +742,7 @@ et l'entraînement l'ignorent correctement. Un test verrouille cette régression
 | | HDFS muet pour un checkpoint | exception capturée | avertissement, le traitement continue |
 | | Tâche bloquée sans fin | `execution_timeout` | tuée puis relancée (`retries=2`) |
 | **Démarrage** | Service dépendant démarré trop tôt | `depends_on: condition: service_healthy` | attend la **disponibilité**, pas le simple démarrage |
-| | Sonde basée sur un outil JVM | — | sondes TCP (`/dev/tcp`), en millisecondes |
+| | Sonde basée sur un outil JVM | aucune | sondes TCP (`/dev/tcp`), en millisecondes |
 | **Cycle de vie** | Crash transitoire d'un service | Docker | `restart: unless-stopped` (sauf one-shots) |
 | | Aucun modèle sous `/models` | `model_available` | inférence sautée, code 0 |
 | | Interruption en cours d'ingestion | checkpoints | reprise à l'unité près |
@@ -830,7 +830,7 @@ interruption.
   `SPARK_MASTER_URL`, `SPARK_WORKER_CORES`… sont des conventions de l'image
   **bitnami/spark**. L'image **officielle `apache/spark`** les ignore purement et
   simplement : sans `command:` explicite, **aucun processus Master ne démarrait** et
-  rien n'écoutait sur 7077 — alors que le conteneur affichait `Started`. Tous les
+  rien n'écoutait sur 7077, alors que le conteneur affichait `Started`. Tous les
   jobs `spark-submit` (Silver, Gold, ML, streaming) auraient échoué à se connecter
   au cluster. Le Master et le Worker sont désormais lancés explicitement via
   `spark-class`, et un test interdit le retour des variables bitnami.

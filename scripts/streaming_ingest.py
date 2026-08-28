@@ -110,7 +110,7 @@ def write_batch(df, epoch_id: int, spark) -> None:
     1. **Une seule ecriture partitionnee** au lieu d'une boucle par heure.
        L'ancienne version filtrait ``parsed`` pour chaque heure : le parsing
        JSON etait donc recalcule autant de fois qu'il y avait d'heures, plus
-       une fois pour le ``distinct`` et une fois pour le ``count`` final —
+       une fois pour le ``distinct`` et une fois pour le ``count`` final :
        soit N+2 evaluations du meme micro-batch, toutes les 30 secondes.
        ``partitionBy`` produit exactement la meme arborescence en un seul job.
     2. **Marqueurs natifs** : le FileSystem Hadoop de la JVM, pas WebHDFS.

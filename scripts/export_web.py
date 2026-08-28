@@ -7,7 +7,7 @@ local (HDFS, Kafka et Spark tournent sur localhost, derriere Docker). La donnee
 doit donc voyager avec le site, sous forme d'instantane JSON.
 
 Consequence assumee : le site affiche l'etat du datalake au moment du dernier
-``make export-web``, et reste consultable meme cluster eteint — depuis
+``make export-web``, et reste consultable meme cluster eteint, depuis
 n'importe quel telephone, le jour de la soutenance. La date de l'export est
 affichee dans l'interface pour que personne ne prenne un instantane pour du
 temps reel.
@@ -204,7 +204,7 @@ def run(args: argparse.Namespace) -> int:
         "rows": exported,
         "cities": sorted({row.get("city") for row in daily if row.get("city")}),
         "summary": summarize(daily),
-        "source_batch": "Météo-France — données climatologiques quotidiennes",
+        "source_batch": "Météo-France : données climatologiques quotidiennes",
         "source_stream": "Open-Meteo (Kafka → Spark Structured Streaming)",
     }
     write_json(out_dir / "meta.json", meta)

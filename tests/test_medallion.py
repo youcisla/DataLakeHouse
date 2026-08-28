@@ -963,7 +963,7 @@ def test_every_dependency_waits_for_readiness_not_just_startup():
         if not dependencies:
             continue
         assert isinstance(dependencies, dict), (
-            f"{name} : depends_on en forme courte — n'attend pas la disponibilite")
+            f"{name} : depends_on en forme courte : n'attend pas la disponibilite")
         for target, rule in dependencies.items():
             assert rule.get("condition"), f"{name} -> {target} : condition absente"
             depended_on.add((target, rule["condition"]))
@@ -1002,7 +1002,7 @@ def test_services_do_not_rely_on_env_vars_their_image_ignores():
     L'image officielle apache/spark les ignore : sans ``command:`` explicite,
     aucun processus Master ne demarre, rien n'ecoute sur 7077, et pourtant le
     conteneur affiche "Started". Tous les jobs spark-submit echouaient alors a
-    se connecter — une panne invisible jusqu'a la premiere tache Spark.
+    se connecter : une panne invisible jusqu'a la premiere tache Spark.
     """
     yaml = pytest.importorskip("yaml", reason="PyYAML absent hors conteneur")
     compose = Path(__file__).resolve().parent.parent / "docker" / "docker-compose.yml"
@@ -1019,7 +1019,7 @@ def test_services_do_not_rely_on_env_vars_their_image_ignores():
                 f"{name} : {variable} est une convention bitnami, "
                 f"ignoree par l'image officielle apache/spark")
         command = spec.get("command")
-        assert command, f"{name} : aucune commande explicite — rien ne demarrera"
+        assert command, f"{name} : aucune commande explicite : rien ne demarrera"
         assert any("spark-class" in str(part) for part in command), (
             f"{name} : le processus Spark doit etre lance explicitement")
 
@@ -1089,7 +1089,7 @@ def test_mark_many_is_one_write_not_n():
     # Fonction pure : l'etat d'origine est intact.
     assert state["done"] == []
 
-    # Resultat identique au marquage un par un — mais en une seule ecriture.
+    # Resultat identique au marquage un par un, mais en une seule ecriture.
     one_by_one = state
     for dt_value in dts:
         one_by_one = checkpoint.mark_done_in(one_by_one, dt_value)
@@ -1120,7 +1120,7 @@ def test_spark_jobs_use_native_hdfs_not_webhdfs():
     for name in ("silver_transform.py", "gold_transform.py", "streaming_ingest.py"):
         source = (scripts / name).read_text(encoding="utf-8")
         assert "hdfs_utils" not in source, (
-            f"{name} : appels WebHDFS dans un job Spark — utiliser le "
+            f"{name} : appels WebHDFS dans un job Spark : utiliser le "
             f"FileSystem Hadoop natif")
 
 
@@ -1164,7 +1164,7 @@ def test_host_port_8080_is_never_published():
     """
     8080 est volontairement laisse libre sur l'hote : c'est le port le plus
     souvent deja occupe (autre projet, proxy, IDE). Les ports INTERNES des
-    conteneurs restent inchanges — seule la partie hote du mapping compte.
+    conteneurs restent inchanges, seule la partie hote du mapping compte.
     """
     yaml = pytest.importorskip("yaml", reason="PyYAML absent hors conteneur")
     root = Path(__file__).resolve().parent.parent
@@ -1190,7 +1190,7 @@ def test_host_port_8080_is_never_published():
             published.setdefault(host_port(mapping), []).append(name)
 
     assert "8080" not in published, (
-        f"port hote 8080 publie par {published.get('8080')} — il doit rester libre")
+        f"port hote 8080 publie par {published.get('8080')} : il doit rester libre")
     assert published.get("8082") == ["airflow-webserver"], (
         f"l'UI Airflow doit etre sur 8082, trouve : {published.get('8082')}")
 
@@ -1384,7 +1384,7 @@ def test_phony_covers_targets_that_collide_with_directories():
     """
     `make ml` ne faisait RIEN : un repertoire `ml/` existe a la racine, donc
     make considerait la cible a jour et la sautait en silence. C'est
-    exactement le role de .PHONY — et le genre de panne qui ne dit rien.
+    exactement le role de .PHONY, et le genre de panne qui ne dit rien.
     """
     root = Path(__file__).resolve().parent.parent
     makefile = (root / "Makefile").read_text(encoding="utf-8")

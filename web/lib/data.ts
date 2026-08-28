@@ -1,7 +1,7 @@
 /**
  * Chargement des donnees : les JSON produits par `make export-web` sont
  * incorpores AU BUILD (import statique). Le site n'appelle donc aucune API a
- * l'execution — c'est ce qui le rend deployable sur Vercel sans acces au
+ * l'execution, c'est ce qui le rend deployable sur Vercel sans acces au
  * cluster local, et consultable meme cluster eteint.
  */
 import dailyRaw from "@/public/data/daily.json";
@@ -91,12 +91,12 @@ export function pivotByCity(
 
 export function formatNumber(value: number | null | undefined, digits = 1): string {
   return value === null || value === undefined || Number.isNaN(value)
-    ? "—"
+    ? "-"
     : value.toFixed(digits);
 }
 
 export function formatDate(value: string | null | undefined): string {
-  if (!value) return "—";
+  if (!value) return "-";
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? String(value).slice(0, 10)

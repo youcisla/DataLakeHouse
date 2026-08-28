@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Jetons de design — palette data-viz validee (CVD + contraste, deux modes).
+   Jetons de design : palette data-viz validee (CVD + contraste, deux modes).
    Les valeurs sombres sont declarees SOUS LES DEUX portees : la media query
    couvre le reglage systeme, la portee [data-theme] couvre le bouton, qui
    doit gagner dans les deux sens.

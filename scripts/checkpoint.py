@@ -121,7 +121,7 @@ def mark_many_in(state: Dict[str, Any], keys: List[str]) -> Dict[str, Any]:
     Marque PLUSIEURS unites d'un coup (fonction pure).
 
     Indispensable des que les unites se comptent en centaines : marquer une a
-    une relit et rereecrit tout l'etat a chaque fois — un cout quadratique en
+    une relit et rereecrit tout l'etat a chaque fois : un cout quadratique en
     octets transferes, pour des milliers d'aller-retours HTTP.
     """
     done = set(state.get("done", []))
