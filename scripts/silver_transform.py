@@ -557,7 +557,9 @@ def write_silver(spark: "SparkSession", silver: "DataFrame", only_new: bool) -> 
     from pyspark.sql import functions as F
 
     output_cols = SILVER_SCHEMA + INDICATOR_COLUMNS
-    silver = silver.select(*output_cols)
+    # Partitionnement ANNUEL (27 partitions) plutot que journalier (~9860) :
+    # evite des milliers de petits fichiers qui saturent le namenode.
+    silver = silver.withColumn("year", F.year("dt")).select(*output_cols, "year")
 
     # (1) Persistance : le plan ne sera evalue qu'une fois pour l'inspection
     # des partitions ET pour l'ecriture.
@@ -565,45 +567,45 @@ def write_silver(spark: "SparkSession", silver: "DataFrame", only_new: bool) -> 
     silver_path = f"{hdfs_base()}/silver/meteo"
 
     try:
-        all_dts = [
-            row.dt.strftime("%Y-%m-%d")
-            for row in silver.select("dt").distinct().orderBy("dt").collect()
+        all_years = [
+            str(row.year)
+            for row in silver.select("year").distinct().orderBy("year").collect()
         ]
-        if not all_dts:
+        if not all_years:
             logger.info("Aucune donnee Silver a ecrire.")
             return
 
         if only_new:
             # (2) Un seul appel natif pour connaitre toutes les partitions
             # deja ecrites, croise avec les checkpoints (double filet).
-            already_written = existing_partitions(spark, silver_path)
-            pending = checkpoint.pending_keys(checkpoint.STAGE_SILVER, all_dts)
-            dts = [d for d in pending if d not in already_written]
-            skipped = len(all_dts) - len(dts)
+            already_written = existing_partitions(spark, silver_path, prefix="year=")
+            pending = checkpoint.pending_keys(checkpoint.STAGE_SILVER, all_years)
+            years = [y for y in pending if y not in already_written]
+            skipped = len(all_years) - len(years)
             if skipped:
                 logger.info("--only-new : %d partition(s) deja ecrite(s), ignoree(s).",
                             skipped)
         else:
-            dts = all_dts
+            years = all_years
 
-        if not dts:
+        if not years:
             logger.info("Aucune partition Silver a ecrire.")
             return
 
-        if len(dts) != len(all_dts):
-            silver = silver.filter(F.col("dt").cast("string").isin(dts))
+        if len(years) != len(all_years):
+            silver = silver.filter(F.col("year").cast("string").isin(years))
 
-        logger.info("Ecriture Silver vers %s (%d partition(s) dt)", silver_path, len(dts))
-        _write_parquet_dynamic(silver, silver_path, ["dt"])
+        logger.info("Ecriture Silver vers %s (%d partition(s) year)", silver_path, len(years))
+        _write_parquet_dynamic(silver, silver_path, ["year"])
 
         # (2) Marqueurs natifs, (3) checkpoint en une seule ecriture.
-        written = write_success_markers(spark, silver_path, dts)
-        checkpoint.mark_many(checkpoint.STAGE_SILVER, dts)
+        written = write_success_markers(spark, silver_path, years, prefix="year=")
+        checkpoint.mark_many(checkpoint.STAGE_SILVER, years)
         checkpoint.record_run(checkpoint.STAGE_SILVER, checkpoint.run_id("silver"),
-                              "success", partitions_written=len(dts),
+                              "success", partitions_written=len(years),
                               markers_written=written)
         logger.info("Silver ecrit : %d partition(s), %d marqueur(s), checkpoint groupe.",
-                    len(dts), written)
+                    len(years), written)
     finally:
         silver.unpersist()
 

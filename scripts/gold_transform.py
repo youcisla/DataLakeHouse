@@ -448,29 +448,32 @@ def write_daily_aggregates(spark: "SparkSession", daily: "DataFrame") -> None:
     """
     import checkpoint
     import silver_transform
+    from pyspark.sql import functions as F
 
+    daily = daily.withColumn("year", F.year("dt"))
     path = f"{hdfs_base()}/gold/meteo/daily_aggregates"
-    dts = [r.dt.strftime("%Y-%m-%d") for r in daily.select("dt").distinct().orderBy("dt").collect()]
-    _write_parquet_dynamic(daily, path, ["dt"])
+    years = [str(r.year) for r in daily.select("year").distinct().orderBy("year").collect()]
+    _write_parquet_dynamic(daily, path, ["year"])
 
-    written = silver_transform.write_success_markers(spark, path, dts)
+    written = silver_transform.write_success_markers(spark, path, years, prefix="year=")
     checkpoint.mark_many(checkpoint.STAGE_GOLD,
-                         [gold_key("daily_aggregates", d) for d in dts])
-    logger.info("daily_aggregates ecrit (%d partition(s) dt, %d marqueur(s)).",
-                len(dts), written)
+                         [gold_key("daily_aggregates", y) for y in years])
+    logger.info("daily_aggregates ecrit (%d partition(s) year, %d marqueur(s)).",
+                len(years), written)
 
 
 def write_weekly_trends(weekly: "DataFrame") -> None:
-    """Écrit weekly_trends (partition year/week) + _SUCCESS racine."""
+    """Écrit weekly_trends (partition year) + _SUCCESS racine."""
     path = f"{hdfs_base()}/gold/meteo/weekly_trends"
-    _write_parquet_dynamic(weekly, path, ["year", "week"])
+    _write_parquet_dynamic(weekly, path, ["year"])
     logger.info("weekly_trends écrit.")
 
 
 def write_extreme_events(extreme: "DataFrame") -> None:
-    """Écrit extreme_events (partition dt) + _SUCCESS racine."""
+    """Écrit extreme_events (partition year) + _SUCCESS racine."""
+    from pyspark.sql import functions as F
     path = f"{hdfs_base()}/gold/meteo/extreme_events"
-    _write_parquet_dynamic(extreme, path, ["dt"])
+    _write_parquet_dynamic(extreme.withColumn("year", F.year("dt")), path, ["year"])
     logger.info("extreme_events écrit.")
 
 
@@ -512,22 +515,22 @@ def run(args: argparse.Namespace) -> None:
             import checkpoint
             import silver_transform
 
-            all_dts = [r.dt.strftime("%Y-%m-%d")
-                       for r in silver.select("dt").distinct().orderBy("dt").collect()]
+            all_years = [str(r.year)
+                         for r in silver.select("year").distinct().orderBy("year").collect()]
             # Un seul globStatus natif au lieu d'un appel WebHDFS par partition.
             already = silver_transform.existing_partitions(
-                spark, f"{hdfs_base()}/gold/meteo/daily_aggregates")
+                spark, f"{hdfs_base()}/gold/meteo/daily_aggregates", prefix="year=")
             done = set(checkpoint.load(checkpoint.STAGE_GOLD).get("done", []))
-            todo = [d for d in all_dts
-                    if gold_key("daily_aggregates", d) not in done and d not in already]
-            skipped = len(all_dts) - len(todo)
+            todo = [y for y in all_years
+                    if gold_key("daily_aggregates", y) not in done and y not in already]
+            skipped = len(all_years) - len(todo)
             if skipped:
                 logger.info("Gold --only-new : %d partition(s) deja calculee(s), ignoree(s).",
                             skipped)
             if not todo:
                 logger.info("Gold : rien de nouveau a calculer.")
                 return
-            silver = silver.filter(F.col("dt").cast("string").isin(todo))
+            silver = silver.filter(F.col("year").cast("string").isin(todo))
 
         daily = compute_daily_aggregates(silver)
         daily.cache()
