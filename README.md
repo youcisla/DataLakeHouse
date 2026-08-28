@@ -86,7 +86,7 @@ Concevoir et implémenter un datalake en architecture Bronze → Silver → Gold
 | `spark-worker` | meteo-spark:3.5.1 (build) | aucun | Workers Spark |
 | `postgres` | postgres:15-alpine | 5432 | Méta-données Airflow |
 | `airflow-init` | meteo-airflow:2.9.3 (build) | aucun | Migration DB + user admin (one-shot) |
-| `airflow-webserver` | meteo-airflow:2.9.3 (build) | 8080 | UI Airflow |
+| `airflow-webserver` | meteo-airflow:2.9.3 (build) | **8082** (hôte) → 8080 | UI Airflow |
 | `airflow-scheduler` | meteo-airflow:2.9.3 (build) | aucun | Scheduler Airflow |
 | `kafka-producer` | meteo-base (build) | aucun | Producteur Open-Meteo → Kafka (5 min) |
 | `jupyter` | meteo-jupyter (build) | 8888 | Notebooks (token `meteo`) |
@@ -214,15 +214,17 @@ docker exec ollama ollama pull llama3.2:3b   # télécharge le modèle LLM
 ./deploy.sh trigger      # lance dag_bronze_ingest → enchaîne silver → gold
 
 # 3) Ouvrir :
-#    Airflow    http://localhost:8080   (admin / admin)
+#    Airflow    http://localhost:8082   (admin / admin)
 #    HDFS UI    http://localhost:9870
 #    Spark UI   http://localhost:8081
 #    Jupyter    http://localhost:8888   (token : meteo)
 #    Dashboard  http://localhost:8501
 ```
 
-> ⚠️ **Ports 8080 et 8081** : Airflow et Spark Master utilisent tous deux 8080 en
-> interne. Pour éviter le conflit, Airflow est exposé sur 8080 et l'UI Spark sur
+> ⚠️ **Ports** : Airflow et Spark Master écoutent tous deux sur 8080 **à
+> l'intérieur** de leur conteneur. Côté hôte, **8080 est volontairement laissé
+> libre** (il est très souvent déjà pris) : Airflow est publié sur **8082**
+> (`AIRFLOW_WEB_PORT`) et l'UI Spark sur
 > 8081 (http://localhost:8081).
 
 Autres commandes : `./deploy.sh status` · `./deploy.sh logs kafka-producer` ·

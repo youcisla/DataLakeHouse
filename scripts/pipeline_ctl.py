@@ -77,9 +77,13 @@ def namenode_url() -> str:
 
 HDFS_USER = os.environ.get("HDFS_USER", "root")
 
-#: URL de sante du webserver Airflow (vue depuis le reseau Docker).
+#: URL de sante du webserver Airflow, vue DEPUIS LE RESEAU DOCKER : le port
+#: interne reste 8080 quel que soit le port publie sur l'hote.
 AIRFLOW_HEALTH_URL = os.environ.get(
     "AIRFLOW_HEALTH_URL", "http://airflow-webserver:8080/health")
+
+#: Port HOTE de l'UI Airflow (8080 est volontairement laisse libre).
+AIRFLOW_HOST_PORT = os.environ.get("AIRFLOW_WEB_PORT", "8082")
 
 #: Répertoires racines créés à l'initialisation du datalake.
 HDFS_DIRS: List[str] = [
@@ -485,7 +489,7 @@ def cmd_checkpoints(args: argparse.Namespace) -> int:
 def cmd_urls(args: argparse.Namespace) -> int:
     print("")
     print("  Interfaces du datalake")
-    print("  Airflow     http://localhost:8080     (admin / admin)")
+    print(f"  Airflow     http://localhost:{AIRFLOW_HOST_PORT}     (admin / admin)")
     print("  Spark       http://localhost:8081")
     print("  HDFS        http://localhost:9870")
     print("  Jupyter     http://localhost:8888     (token : meteo)")

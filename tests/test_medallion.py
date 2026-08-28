@@ -1157,3 +1157,42 @@ def test_streaming_writes_each_micro_batch_once():
     writers = re.findall(r"\.write\b(?!_)", body)
     assert len(writers) == 1, f"write_batch : {len(writers)} writers Spark, attendu 1"
     assert body.count(".text(") == 1, "write_batch : ecriture texte dans une boucle"
+
+
+def test_host_port_8080_is_never_published():
+    """
+    8080 est volontairement laisse libre sur l'hote : c'est le port le plus
+    souvent deja occupe (autre projet, proxy, IDE). Les ports INTERNES des
+    conteneurs restent inchanges — seule la partie hote du mapping compte.
+    """
+    yaml = pytest.importorskip("yaml", reason="PyYAML absent hors conteneur")
+    root = Path(__file__).resolve().parent.parent
+    compose = yaml.safe_load((root / "docker" / "docker-compose.yml").read_text(encoding="utf-8"))
+
+    env = {}
+    for line in (root / "docker" / ".env").read_text(encoding="utf-8").splitlines():
+        if "=" in line and not line.strip().startswith("#"):
+            key, _, value = line.partition("=")
+            env[key.strip()] = value.strip()
+
+    def host_port(mapping: str) -> str:
+        """Partie hote d'un mapping 'hote:conteneur', variables resolues."""
+        raw = str(mapping).split(":")[0]
+        if raw.startswith("${"):
+            name, _, default = raw[2:].rstrip("}").partition(":-")
+            return env.get(name, default)
+        return raw
+
+    published = {}
+    for name, spec in compose["services"].items():
+        for mapping in (spec.get("ports") or []):
+            published.setdefault(host_port(mapping), []).append(name)
+
+    assert "8080" not in published, (
+        f"port hote 8080 publie par {published.get('8080')} — il doit rester libre")
+    assert published.get("8082") == ["airflow-webserver"], (
+        f"l'UI Airflow doit etre sur 8082, trouve : {published.get('8082')}")
+
+    # Aucun port hote ne doit etre publie deux fois.
+    collisions = {port: names for port, names in published.items() if len(names) > 1}
+    assert not collisions, f"ports hote en conflit : {collisions}"
