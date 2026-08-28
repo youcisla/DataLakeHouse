@@ -65,7 +65,11 @@ def _temporal_split(
     test_size pour le test.
     """
     df = df.sort_values(["location", "timestamp"]).reset_index(drop=True)
-    dates = np.sort(df["dt"].astype(str).unique())
+    # Normaliser dt en chaîne : train_end/val_end sont des chaînes, et comparer
+    # une datetime à une chaîne lève une TypeError.
+    df = df.copy()
+    df["dt"] = df["dt"].astype(str)
+    dates = np.sort(df["dt"].unique())
     if len(dates) < 3:
         raise ValueError("Pas assez de dates distinctes pour un split temporel.")
 
