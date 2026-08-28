@@ -30,6 +30,7 @@ import pandas as pd
 import pytest
 
 import checkpoint
+import export_web
 import gold_transform
 import kafka_producer
 import meteofrance_ingest as mf
@@ -1196,3 +1197,84 @@ def test_host_port_8080_is_never_published():
     # Aucun port hote ne doit etre publie deux fois.
     collisions = {port: names for port, names in published.items() if len(names) > 1}
     assert not collisions, f"ports hote en conflit : {collisions}"
+
+
+# ===========================================================================
+# EXPORT WEB : les donnees voyagent avec le site (Vercel n'atteint pas le cluster)
+# ===========================================================================
+
+def test_export_never_invents_values():
+    """
+    Une mesure manquante doit arriver a `null` cote site, jamais a 0.
+
+    Meme regle que le producteur Kafka : le front sait afficher un trou, il ne
+    saurait pas deviner qu'un 0 est en realite une absence de mesure.
+    """
+    assert export_web.clean_value(float("nan")) is None
+    assert export_web.clean_value(float("inf")) is None
+    assert export_web.clean_value(None) is None
+    # Un vrai zero (pas de pluie) est conserve.
+    assert export_web.clean_value(0.0) == 0.0
+    assert export_web.clean_value(0) == 0
+    # Les flottants sont arrondis, pas tronques.
+    assert export_web.clean_value(3.14159) == 3.142
+    assert export_web.clean_value("Paris") == "Paris"
+
+
+def test_clean_records_is_json_serializable():
+    import json as _json
+
+    rows = [{"dt": "2025-01-01", "city": "Paris", "temp_avg": float("nan"),
+             "precip_sum": 0.0, "n_obs": 3}]
+    cleaned = export_web.clean_records(rows)
+    assert cleaned[0]["temp_avg"] is None
+    assert cleaned[0]["precip_sum"] == 0.0
+    _json.dumps(cleaned)  # ne doit pas lever
+
+
+def test_summary_ignores_missing_measurements():
+    """Une ville sans temperature ne doit pas tirer la moyenne vers le bas."""
+    summary = export_web.summarize([
+        {"dt": "2025-06-02", "city": "Paris", "temp_avg": 20.0, "precip_sum": 1.0, "n_obs": 2},
+        {"dt": "2025-06-02", "city": "Lyon", "temp_avg": None, "precip_sum": 3.0, "n_obs": 2},
+    ])
+    assert summary["temp_avg"] == 20.0        # et non 10.0
+    assert summary["precip_total"] == 4.0
+    assert summary["cities"] == 2
+    assert summary["last_day"] == "2025-06-02"
+    # Jeu vide : aucune valeur inventee.
+    empty = export_web.summarize([])
+    assert empty["temp_avg"] is None and empty["cities"] == 0
+
+
+def test_city_markers_need_known_coordinates():
+    assert export_web.city_marker("Paris", 21.5)["lat"] == 48.8566
+    assert export_web.city_marker("Tokyo", 30.0) is None
+    assert export_web.city_marker("Lyon", None)["temperature"] is None
+
+
+def test_web_data_files_are_valid_json():
+    """Le build Next.js importe ces fichiers : un JSON casse casse le deploiement."""
+    import json as _json
+
+    data_dir = Path(__file__).resolve().parent.parent / "web" / "public" / "data"
+    expected = {"daily.json", "weekly.json", "extremes.json", "climate.json",
+                "predictions.json", "map.json", "bulletin.json", "meta.json"}
+    present = {p.name for p in data_dir.glob("*.json")}
+    assert expected <= present, f"fichiers manquants : {sorted(expected - present)}"
+    for path in data_dir.glob("*.json"):
+        _json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_city_colour_order_is_fixed_not_ranked():
+    """
+    Une ville garde sa couleur quels que soient les filtres : la couleur suit
+    l'entite, jamais son rang d'affichage.
+    """
+    source = (Path(__file__).resolve().parent.parent / "web" / "lib"
+              / "data.ts").read_text(encoding="utf-8")
+    assert "CITY_ORDER" in source
+    assert "indexOf(city)" in source, "la couleur doit etre indexee sur l'ordre fixe"
+    # Les cinq villes du projet sont bien dans l'ordre fixe.
+    for city in ("Paris", "Lyon", "Marseille", "Bordeaux", "Lille"):
+        assert f'"{city}"' in source
