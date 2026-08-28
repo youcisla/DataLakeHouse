@@ -117,7 +117,7 @@ make all
 | 8 | Pipeline | `pipeline` | Déclenche Bronze, attend Bronze → Silver → Gold → entraînement → inférence → bulletin |
 | 9 | IA *(si `PROFILE=genai`)* | `genai` | Démarre Ollama et télécharge le modèle LLM |
 | 10 | Contrôle | `verify` | Les trois couches **plus** `ml_predictions` et `ai_insights` |
-| 11 | Vitrine | `showcase` | Exporte les sorties Gold vers `site/data.json` |
+| 11 | Vitrine | `export-web` | Exporte les tables Gold en JSON pour le site Next.js |
 | 12 | Sortie | `urls` | Rappelle les interfaces |
 
 **L'entraînement et l'inférence vivent dans le DAG Gold.** `dag_gold_aggregate`
@@ -194,7 +194,8 @@ make silver
 make gold
 make checkpoints   # où en est chaque étape (reprise)
 make verify        # re-contrôle l'état des trois couches sur HDFS
-make showcase      # exporte les sorties Gold vers site/data.json (vitrine en ligne)
+make export-web    # exporte les tables Gold en JSON pour le site Next.js
+make web-dev       # site web en local sur http://localhost:3000
 make status        # état des conteneurs
 make logs SVC=kafka-producer
 make stop | down | reset | clean
@@ -558,7 +559,7 @@ projet-meteo/
 │   ├── checkpoint.py               # reprise fine, unité de travail par unité
 │   ├── verify_medallion.py         # contrôle automatique des 3 couches (make verify)
 │   ├── pipeline_ctl.py             # pilote de make all, exécuté dans les conteneurs
-│   ├── export_showcase.py          # exporte les sorties Gold vers site/data.json
+│   ├── export_web.py               # exporte les tables Gold en JSON pour le site Next.js
 │   └── compress_silver.py          # ré-écriture Silver en Zstd niveau 22
 ├── ml/
 │   ├── feature_engineering.py      # lags, moyennes mobiles, encodages, target J+1
@@ -584,9 +585,8 @@ projet-meteo/
 ├── configs/
 │   ├── spark-defaults.conf         # Zstd 22, overwrite dynamique, mémoire
 │   └── requirements.txt            # dépendances Python
-├── site/                           # vitrine statique (Vercel) : index.html + data.json
+├── web/                            # interface Next.js (Vercel) : app/, components/, lib/
 ├── Makefile                        # automatisation complète (make all)
-├── vercel.json                     # configuration de déploiement Vercel
 ├── deploy.sh                       # déploiement en 1 commande
 └── README.md                       # ce document
 ```
@@ -681,9 +681,6 @@ présente sur les graphiques concernés. Les couleurs de statut (alerte / extrê
 sont réservées et toujours accompagnées d'une pastille **et** d'un libellé : la
 couleur ne porte jamais le sens seule. Thème clair/sombre au choix du visiteur,
 le bouton l'emportant sur le réglage système dans les deux sens.
-
-> `site/` (page statique d'une seule page, cible `make showcase`) est conservée :
-> c'est la vitrine légère. `web/` est l'interface complète.
 
 ## 16. Résilience : analyse des modes de défaillance
 

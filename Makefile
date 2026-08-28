@@ -53,7 +53,7 @@ PY               ?= python3
 
 .PHONY: help all re doctor build test test-local lint dry-run up wait-services \
         init topic unpause pipeline wait trigger bronze silver gold genai \
-        showcase export-web web-install web-dev web-build \
+        export-web web-install web-dev web-build \
         checkpoints checkpoints-reset verify urls status ps logs stop down reset clean
 
 help:  ## Affiche l aide - instantane, aucun conteneur demarre
@@ -94,7 +94,6 @@ help:  ## Affiche l aide - instantane, aucun conteneur demarre
 	@echo   make export-web - Exporte les tables Gold en JSON pour le site
 	@echo   make web-dev - Site en local sur http://localhost:3000
 	@echo   make verify - Controle les trois couches sur HDFS
-	@echo   make showcase - Exporte les sorties Gold vers la vitrine en ligne
 	@echo   make urls - Rappelle les interfaces
 	@echo ---
 	@echo   Options
@@ -106,7 +105,7 @@ help:  ## Affiche l aide - instantane, aucun conteneur demarre
 # =============================================================================
 #  LA CIBLE PRINCIPALE : tout le TP, de bout en bout, sans intervention
 # =============================================================================
-all: doctor build test up wait-services init topic unpause pipeline $(GENAI_STEP) verify showcase export-web urls  ## TOUT : cluster, Bronze, Silver, Gold, ML, predictions, verification, vitrine en ligne. Relancable : reprend ou il s est arrete.
+all: doctor build test up wait-services init topic unpause pipeline $(GENAI_STEP) verify export-web urls  ## TOUT : cluster, Bronze, Silver, Gold, ML, predictions, verification, vitrine en ligne. Relancable : reprend ou il s est arrete.
 	@echo [make] Workflow termine : Medallion, ML et predictions en place et verifies.
 
 re: reset all  ## Reset complet, volumes compris, puis rejoue tout
@@ -206,9 +205,6 @@ checkpoints-reset:  ## Vide les checkpoints : tout sera rejoue au prochain run
 
 verify:  ## Controle sur HDFS que Bronze, Silver, Gold, ML et bulletins sont complets
 	@$(DCX) spark-master python3 /opt/project/scripts/verify_medallion.py --allow-empty-stream --with-ml
-
-showcase:  ## Exporte les sorties Gold vers site/data.json (vitrine en ligne)
-	@$(DCX) spark-master python3 /opt/project/scripts/export_showcase.py
 
 urls:  ## Rappelle les URLs des interfaces
 	@echo [make] Interfaces du datalake :
