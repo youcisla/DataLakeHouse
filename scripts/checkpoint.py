@@ -16,7 +16,7 @@ coute jamais plus que l'unite en cours. Un journal borne des derniers runs
 sans lire les donnees.
 
 Stockage : JSON dans HDFS sous ``/checkpoints/medallion/<etape>.json``, ecrit
-via ``hdfs_utils`` (WebHDFS) — donc disponible dans **toutes** les images du
+via ``hdfs_utils`` (WebHDFS), donc disponible dans **toutes** les images du
 projet, sans dependance supplementaire. Un backend fichier local existe pour
 les tests et l'usage hors cluster :
 

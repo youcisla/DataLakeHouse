@@ -2,9 +2,8 @@
 """
 test_transform.py : tests unitaires sans Spark des transformations Silver/Gold.
 ===============================================================================
-Ces tests n'importent ni Spark ni HDFS : ils valident uniquement les fonctions
-pures de silver_transform et gold_transform (avec pandas pour la logique de
-déduplication).
+Ces tests n'importent ni Spark ni HDFS : ils valident les fonctions pures de
+silver_transform et gold_transform (avec pandas pour la déduplication).
 """
 
 from __future__ import annotations
@@ -27,33 +26,10 @@ import gold_transform
 # silver_transform : fonctions pures
 # ---------------------------------------------------------------------------
 
-def test_parse_city_country():
-    assert silver_transform.parse_city_country("PARIS  , FR") == ("Paris", "FR")
-    assert silver_transform.parse_city_country("LYON-BRON , FR") == ("Lyon-Bron", "FR")
-    # Sans virgule : nom nettoyé seul, pas de pays.
-    assert silver_transform.parse_city_country("MARSEILLE") == ("Marseille", "")
-    assert silver_transform.parse_city_country("") == ("", "")
-    # Espaces et casse.
-    assert silver_transform.parse_city_country("  nice , fr  ") == ("Nice", "FR")
-
-
-def test_is_missing():
-    for value in [-9999, -999, 9999, None]:
-        assert silver_transform.is_missing(value) is True
-    for value in [0, 22.5]:
-        assert silver_transform.is_missing(value) is False
-
-
-def test_to_celsius():
-    assert silver_transform.to_celsius(220) == 22.0
-    assert silver_transform.to_celsius(-9999) is None
-    assert silver_transform.to_celsius(5) == 0.5
-
-
 def test_validate_required_columns():
-    required = ["STATION", "NAME", "DATE"]
-    assert silver_transform.validate_required_columns(["STATION"], required) == ["NAME", "DATE"]
-    assert silver_transform.validate_required_columns(["STATION", "NAME", "DATE"], required) == []
+    required = ["NUM_POSTE", "NOM_USUEL", "AAAAMMJJ"]
+    assert silver_transform.validate_required_columns(["NUM_POSTE"], required) == ["NOM_USUEL", "AAAAMMJJ"]
+    assert silver_transform.validate_required_columns(["NUM_POSTE", "NOM_USUEL", "AAAAMMJJ"], required) == []
 
 
 def test_deduplication():

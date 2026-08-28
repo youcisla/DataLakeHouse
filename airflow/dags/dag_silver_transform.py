@@ -4,7 +4,7 @@ dag_silver_transform.py : DAG 2, transformation Bronze → Silver
 ================================================================
 Job Spark qui :
   1. lit les partitions Bronze ayant un marqueur _SUCCESS (archives Météo-France
-     en .csv.gz, NOAA facultatif, stream Open-Meteo en JSON),
+     en .csv.gz et stream Open-Meteo en JSON),
   2. valide le schéma, déduplique (station_id + timestamp) et normalise
      vers le schéma Silver unifié,
   3. calcule les indicateurs (moyennes mobiles 3j/7j, écart-type 7j, anomalie),
@@ -33,8 +33,6 @@ DEFAULT_ARGS = {
     "email_on_failure": False,
     "retries": 2,
     "retry_delay": timedelta(minutes=3),
-    # Job Spark Silver : au-dela, la tache est tuee et relancee plutot que
-    # de rester bloquee sans fin (ni succes ni echec).
     "execution_timeout": timedelta(hours=2),
     "start_date": datetime(2024, 1, 1),
 }

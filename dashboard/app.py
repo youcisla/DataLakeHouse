@@ -60,6 +60,35 @@ def _select_source_row(grp: pd.DataFrame) -> pd.DataFrame:
     return preferred if not preferred.empty else grp
 
 
+def _weather_icon(row: pd.Series) -> str:
+    """Icône météo déduite des indicateurs Gold disponibles (pas de weathercode)."""
+    def _num(value) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    snow = _num(row.get("snow_sum"))
+    precip = _num(row.get("precip_sum"))
+    wind = _num(row.get("wind_avg"))
+    temp = row.get("temp_avg")
+    temp = _num(temp) if pd.notna(temp) else None
+
+    if snow > 0:
+        return "🌨️"
+    if precip >= 5:
+        return "🌧️"
+    if precip > 0:
+        return "🌦️"
+    if wind >= 20:
+        return "💨"
+    if temp is not None and temp >= 30:
+        return "☀️"
+    if temp is not None and temp <= 2:
+        return "🥶"
+    return "⛅"
+
+
 def _event_emoji(event_type: str) -> str:
     """Badge textuel (emoji) pour un type d'événement extrême."""
     e = str(event_type).lower()
@@ -156,7 +185,8 @@ def render_overview(config: dict) -> None:
         temp_min = row.get("temp_min")
         temp_max = row.get("temp_max")
         value = f"{float(temp_avg):.1f} °C" if pd.notna(temp_avg) else "n.d."
-        col.metric(city, value)
+        icon = _weather_icon(row)
+        col.metric(f"{icon} {city}", value)
         parts = []
         if pd.notna(temp_min):
             parts.append(f"min {float(temp_min):.1f} °C")

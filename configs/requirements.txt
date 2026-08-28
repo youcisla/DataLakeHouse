@@ -24,3 +24,4 @@ streamlit-autorefresh>=1.0.0
 
 # --- Tests ---
 pytest>=8.0.0
+PyYAML>=6.0

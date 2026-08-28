@@ -672,7 +672,7 @@ def test_interrupted_ingestion_resumes_where_it_stopped(cp):
     Le scenario qui motive tout ce module.
 
     10 lots a ingerer, coupure apres le 7e : la reprise ne doit traiter que
-    les 3 restants — et surtout jamais re-ingerer les 7 premiers.
+    les 3 restants, et surtout jamais re-ingerer les 7 premiers.
     """
     cp.reset(cp.STAGE_BRONZE)
     lots = [mf.batch_key(dep, period)
@@ -742,23 +742,23 @@ def test_make_all_resumes_where_it_stopped(cp):
     """
     `make all` doit pouvoir etre relance en boucle sans tout refaire.
 
-    Coupure apres 'pipeline' : au passage suivant, init/unpause/pipeline sont
-    sautes et l'on reprend a 'ml'.
+    Coupure pendant 'pipeline' : au passage suivant, init/unpause sont
+    sautes et l'on reprend a 'pipeline' (Bronze -> Silver -> Gold -> ML).
     """
-    etapes = ["init", "unpause", "pipeline", "ml", "predict"]
+    etapes = ["init", "unpause", "pipeline"]
     cp.reset(cp.STAGE_WORKFLOW)
 
     executees = []
     for etape in cp.pending_keys(cp.STAGE_WORKFLOW, etapes):
-        if etape == "ml":
-            break  # coupure : le cluster tombe pendant l'entrainement
+        if etape == "pipeline":
+            break  # coupure : le cluster tombe pendant la chaine Medallion + ML
         executees.append(etape)
         cp.mark_done(cp.STAGE_WORKFLOW, etape)
-    assert executees == ["init", "unpause", "pipeline"]
+    assert executees == ["init", "unpause"]
 
     # Deuxieme `make all` : on reprend exactement la ou l'on s'etait arrete.
     reprise = cp.pending_keys(cp.STAGE_WORKFLOW, etapes)
-    assert reprise == ["ml", "predict"]
+    assert reprise == ["pipeline"]
     for etape in reprise:
         cp.mark_done(cp.STAGE_WORKFLOW, etape)
 
@@ -776,14 +776,14 @@ def test_force_replays_a_completed_step(cp, monkeypatch):
     assert pipeline_ctl.skip_if_done("pipeline", force=False) is True
     assert pipeline_ctl.skip_if_done("pipeline", force=True) is False
     # Une etape jamais faite n'est jamais sautee.
-    assert pipeline_ctl.skip_if_done("ml", force=False) is False
+    assert pipeline_ctl.skip_if_done("unpause", force=False) is False
 
 
 def test_step_guard_is_inert_outside_a_container(monkeypatch):
     """
     Hors conteneur, HDFS est injoignable : la garde ne doit rien casser.
 
-    Elle repond 'pas fait' — l'etape est rejouee, ce qui est sans danger
+    Elle repond 'pas fait' : l'etape est rejouee, ce qui est sans danger
     puisque chaque etape est idempotente.
     """
     monkeypatch.setattr(pipeline_ctl, "IN_CONTAINER", False)
@@ -846,9 +846,9 @@ def test_inference_skips_cleanly_without_a_model(monkeypatch, tmp_path):
 
 def test_missing_measurement_stays_null_never_zero():
     """
-    LA regression a ne jamais reintroduire.
+    La regression a ne jamais reintroduire.
 
-    L'ancienne version remplacait une mesure absente par 0.0 — valeur
+    L'ancienne version remplacait une mesure absente par 0.0, valeur
     parfaitement plausible pour une temperature. Rien n'echouait, mais les
     moyennes Gold etaient tirees vers zero et le modele ML apprenait sur des
     valeurs inventees : un succes silencieux avec des donnees fausses.
@@ -873,7 +873,6 @@ def test_valid_measurements_pass_through_untouched():
 
 
 def test_physically_impossible_values_are_rejected():
-    """Une anomalie de la source ne doit pas contaminer les agregats."""
     cases = {
         "temperature_2m": [-9999, 999, float("nan"), "n/a", None],
         "wind_speed_10m": [-5, 5000, "vent"],
@@ -885,36 +884,26 @@ def test_physically_impossible_values_are_rejected():
             assert kafka_producer.validate_measurements({key: value})[key] is None, (
                 f"{key}={value!r} aurait du etre rejete")
 
-    # Les bornes elles-memes restent acceptees.
     low, high = kafka_producer.MEASUREMENT_BOUNDS["temperature_2m"]
     assert kafka_producer.validate_measurements({"temperature_2m": low})["temperature_2m"] == low
     assert kafka_producer.validate_measurements({"temperature_2m": high})["temperature_2m"] == high
 
 
 def test_unknown_keys_survive_a_contract_change():
-    """Le contrat Open-Meteo peut evoluer : on ne jette pas ce qu'on ignore."""
     checked = kafka_producer.validate_measurements({"humidite_relative": 80, "temperature_2m": 12.0})
     assert checked["humidite_relative"] == 80
     assert checked["temperature_2m"] == 12.0
 
 
 def test_empty_records_are_not_published():
-    """Un releve sans aucune mesure ne doit pas grossir le Bronze."""
     assert kafka_producer.has_usable_measurement(
         {"temperature": None, "windspeed": None, "precipitation": None}) is False
-    # Une seule mesure suffit a rendre le releve utile.
     assert kafka_producer.has_usable_measurement({"temperature": 12.0}) is True
     assert kafka_producer.has_usable_measurement({"windspeed": 3.0}) is True
     assert kafka_producer.has_usable_measurement({"precipitation": 0.0}) is True
 
 
 def test_producer_module_imports_without_kafka_or_hdfs():
-    """
-    Les dependances lourdes sont importees DANS les fonctions.
-
-    C'est la convention du projet (cf. silver_transform) : sans elle, ces
-    fonctions pures ne seraient testables ni ici, ni en CI.
-    """
     source = Path(__file__).resolve().parent.parent / "scripts" / "kafka_producer.py"
     header = source.read_text(encoding="utf-8").split("def load_cities")[0]
     for forbidden in ("\nimport requests", "\nfrom kafka import", "\nimport hdfs_utils"):
@@ -931,26 +920,17 @@ def _dag_sources():
 
 
 def test_every_dag_bounds_its_tasks_in_time():
-    """
-    Sans execution_timeout, une tache bloquee reste 'running' indefiniment :
-    ni succes, ni echec, donc aucune alerte et un DAG qui ne finit jamais.
-    """
     for name, source in _dag_sources().items():
         assert "execution_timeout" in source, f"{name} : aucune borne de duree"
         assert "retries" in source, f"{name} : aucune politique de reprise"
 
 
 def test_every_dag_forbids_concurrent_runs():
-    """
-    Deux executions simultanees ecriraient les memes partitions et les memes
-    _SUCCESS : Parquet corrompu et checkpoints incoherents.
-    """
     for name, source in _dag_sources().items():
         assert "max_active_runs=1" in source, f"{name} : executions concurrentes possibles"
 
 
 def test_long_running_services_restart_but_one_shots_do_not():
-    """Un crash transitoire ne doit pas laisser le cluster amoindri en silence."""
     yaml = pytest.importorskip("yaml", reason="PyYAML absent hors conteneur")
     compose = Path(__file__).resolve().parent.parent / "docker" / "docker-compose.yml"
     services = yaml.safe_load(compose.read_text(encoding="utf-8"))["services"]
@@ -959,5 +939,4 @@ def test_long_running_services_restart_but_one_shots_do_not():
                  "spark-master", "spark-worker", "airflow-webserver", "airflow-scheduler"):
         assert services[name].get("restart") == "unless-stopped", f"{name} ne redemarre pas"
 
-    # airflow-init est one-shot : le relancer en boucle rejouerait la migration.
     assert "restart" not in services["airflow-init"]

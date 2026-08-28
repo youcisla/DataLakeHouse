@@ -2,8 +2,8 @@
 """
 silver_transform.py : job Spark « Bronze vers Silver » (DataLake Météo).
 =======================================================================
-Lit les données Bronze (archives Météo-France en CSV ';' gzippé, NOAA en
-CSV, Open-Meteo en JSON) sur HDFS, les
+Lit les données Bronze (archives Météo-France en CSV ';' gzippé, et
+stream Open-Meteo en JSON) sur HDFS, les
 normalise vers un schéma Silver unifié, calcule des indicateurs de fenêtre
 (moyennes mobiles, écart-type, anomalie) puis écrit le résultat en Parquet
 partitionné par dt, compressé Zstd niveau 22.
@@ -26,7 +26,7 @@ import os
 import re
 import sys
 from functools import reduce
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 logger = logging.getLogger("silver_transform")
 
@@ -60,17 +60,6 @@ INDICATOR_COLUMNS: List[str] = [
     "temp_anomaly",
 ]
 
-#: Seuil des valeurs manquantes NOAA (dixièmes d'unité).
-_MISSING_LOW = -900.0
-#: Valeur sentinelle « manquant » pour SNOW / SNWD.
-_MISSING_SNOW = 9999.0
-
-#: Colonnes obligatoires du CSV NOAA.
-NOAA_REQUIRED_COLUMNS: List[str] = [
-    "STATION", "NAME", "LATITUDE", "LONGITUDE", "ELEVATION",
-    "DATE", "PRCP", "TMAX", "TMIN", "TAVG", "SNOW", "AWND",
-]
-
 #: Colonnes obligatoires du CSV Météo-France (jeu QUOT « RR-T-Vent »).
 #: Source : https://meteo.data.gouv.fr (données climatologiques quotidiennes).
 METEOFRANCE_REQUIRED_COLUMNS: List[str] = [
@@ -94,52 +83,6 @@ OPENMETEO_REQUIRED_COLUMNS: List[str] = [
 # ---------------------------------------------------------------------------
 # Fonctions pures (importables et testables SANS Spark)
 # ---------------------------------------------------------------------------
-
-def parse_city_country(name: str) -> Tuple[str, str]:
-    """
-    Sépare un nom de station au format « VILLE, CC » en (ville, code pays).
-
-    Exemples :
-        "PARIS  , FR"      -> ("Paris", "FR")
-        "LYON-BRON , FR"   -> ("Lyon-Bron", "FR")
-        "MARSEILLE"        -> ("Marseille", "")   (pas de virgule)
-    """
-    if not name:
-        return ("", "")
-    name = name.strip()
-    if "," in name:
-        city_raw, country_raw = name.split(",", 1)
-        return (city_raw.strip().title(), country_raw.strip().upper())
-    # Pas de virgule : on retourne le nom nettoyé seul, sans code pays.
-    return (name.title(), "")
-
-
-def is_missing(value: Optional[float]) -> bool:
-    """
-    Retourne True si la valeur est un code « manquant » NOAA.
-
-    Règle : None, valeur <= -900 (ex. -9999) ou valeur == 9999 (SNOW/SNWD).
-    """
-    if value is None:
-        return True
-    try:
-        v = float(value)
-    except (TypeError, ValueError):
-        return True
-    return v <= _MISSING_LOW or v == _MISSING_SNOW
-
-
-def _to_unit(tenths: Optional[float]) -> Optional[float]:
-    """Convertit des dixièmes d'unité en unité (÷ 10, arrondi à 2 décimales)."""
-    if is_missing(tenths):
-        return None
-    return round(float(tenths) / 10.0, 2)
-
-
-def to_celsius(tenths: Optional[float]) -> Optional[float]:
-    """Convertit des dixièmes de °C en °C (None si valeur manquante)."""
-    return _to_unit(tenths)
-
 
 def validate_required_columns(columns: List[str], required: List[str]) -> List[str]:
     """Retourne la liste des colonnes required absentes de columns."""
@@ -330,22 +273,6 @@ def _write_parquet_dynamic(df: "DataFrame", hdfs_path: str, partition_cols: List
 # Lecture du Bronze
 # ---------------------------------------------------------------------------
 
-def read_noaa(spark: "SparkSession") -> Optional["DataFrame"]:
-    """Lit les CSV NOAA du Bronze (une partition par year/month)."""
-    path = f"{hdfs_base()}/bronze/meteo/batch/source=noaa/year=*/month=*/*.csv"
-    logger.info("Lecture NOAA : %s", path)
-    try:
-        return (
-            spark.read
-            .option("header", "true")
-            .option("inferSchema", "true")
-            .csv(path)
-        )
-    except Exception as exc:  # chemin inexistant / répertoire vide
-        logger.warning("Lecture NOAA impossible (%s) : %s", path, exc)
-        return None
-
-
 def read_meteofrance(spark: "SparkSession") -> Optional["DataFrame"]:
     """
     Lit les archives Météo-France du Bronze (CSV ';' gzippés, lecture brute).
@@ -383,58 +310,6 @@ def read_openmeteo(spark: "SparkSession") -> Optional["DataFrame"]:
 # ---------------------------------------------------------------------------
 # Transformations vers le schéma Silver
 # ---------------------------------------------------------------------------
-
-def _register_udfs():
-    """Enregistre les UDFs à partir des fonctions pures (types Spark requis)."""
-    from pyspark.sql import functions as F
-    from pyspark.sql.types import BooleanType, DoubleType, StringType, StructField, StructType
-
-    is_missing_udf = F.udf(is_missing, BooleanType())
-    to_celsius_udf = F.udf(to_celsius, DoubleType())
-    to_unit_udf = F.udf(_to_unit, DoubleType())
-    parse_udf = F.udf(parse_city_country, StructType([
-        StructField("city", StringType(), True),
-        StructField("country", StringType(), True),
-    ]))
-    return is_missing_udf, to_celsius_udf, to_unit_udf, parse_udf
-
-
-def transform_noaa(noaa_df: "DataFrame") -> "DataFrame":
-    """Mappe le CSV NOAA vers le schéma Silver unifié."""
-    from pyspark.sql import functions as F
-
-    missing = validate_required_columns(noaa_df.columns, NOAA_REQUIRED_COLUMNS)
-    if missing:
-        raise ValueError(f"Colonnes NOAA manquantes : {missing}")
-
-    is_missing_udf, to_celsius_udf, to_unit_udf, parse_udf = _register_udfs()
-
-    return (
-        noaa_df
-        .withColumn("_parsed", parse_udf(F.col("NAME")))
-        .withColumn("station_id", F.col("STATION"))
-        .withColumn("station_name", F.col("NAME"))
-        .withColumn("city", F.col("_parsed").getField("city"))
-        .withColumn("country", F.col("_parsed").getField("country"))
-        .withColumn("latitude", F.col("LATITUDE"))
-        .withColumn("longitude", F.col("LONGITUDE"))
-        .withColumn("elevation", F.col("ELEVATION"))
-        .withColumn(
-            "temperature",
-            F.when(
-                (~is_missing_udf(F.col("TMAX"))) & (~is_missing_udf(F.col("TMIN"))),
-                F.round((F.col("TMAX") + F.col("TMIN")) / 2.0 / 10.0, 2),
-            ).otherwise(to_celsius_udf(F.col("TAVG"))),
-        )
-        .withColumn("precipitation", to_unit_udf(F.col("PRCP")))
-        .withColumn("wind_speed", to_unit_udf(F.col("AWND")))
-        .withColumn("snow", to_unit_udf(F.col("SNOW")))
-        .withColumn("timestamp", F.to_timestamp(F.col("DATE"), "yyyyMMdd"))
-        .withColumn("dt", F.to_date(F.col("timestamp")))
-        .withColumn("source", F.lit("NOAA"))
-        .select(*SILVER_SCHEMA)
-    )
-
 
 def transform_meteofrance(mf_df: "DataFrame") -> "DataFrame":
     """
@@ -540,16 +415,12 @@ def transform_to_silver(spark: "SparkSession", start_date: str, end_date: str) -
     from pyspark.sql import functions as F
 
     mf_df = read_meteofrance(spark)
-    noaa_df = read_noaa(spark)
     om_df = read_openmeteo(spark)
 
     frames: List["DataFrame"] = []
     # Source batch principale : archives Météo-France (meteo.data.gouv.fr).
     if mf_df is not None:
         frames.append(transform_meteofrance(mf_df))
-    # Source batch historique (conservée : NOAA GHCN-D, facultative).
-    if noaa_df is not None:
-        frames.append(transform_noaa(noaa_df))
     # Source temps réel : Open-Meteo via Kafka.
     if om_df is not None:
         frames.append(transform_openmeteo(om_df))

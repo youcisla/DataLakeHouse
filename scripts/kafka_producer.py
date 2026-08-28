@@ -9,6 +9,10 @@ et publie chaque relevé au format JSON sur le topic Kafka "meteo-stream".
 Le producteur s'arrête automatiquement lorsque le quota Bronze est atteint
 (voir BRONZE_QUOTA_GB) : contrôle via WebHDFS à chaque lot de 5 envois.
 
+Les dépendances lourdes (requests, kafka, hdfs_utils) sont importées À
+L'INTÉRIEUR des fonctions : le module reste importable et ses fonctions pures
+testables sans broker Kafka ni cluster HDFS (cf. tests/test_medallion.py).
+
 Auteur : Youcef, équipe DataLake Météo
 """
 
@@ -24,10 +28,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-# Comme dans silver_transform / gold_transform, les dependances lourdes
-# (requests, kafka, hdfs_utils) sont importees A L'INTERIEUR des fonctions :
-# le module reste ainsi importable — et ses fonctions pures testables — sans
-# broker Kafka ni cluster HDFS.
+# Chemin des utilitaires HDFS (hdfs_utils.py), importable seulement quand utile.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 
 logger = logging.getLogger("kafka_producer")
@@ -47,6 +48,10 @@ DEFAULT_CITIES = [
 _QUOTA_CHECK_EVERY = 5          # contrôle du quota tous les N envois
 _HTTP_TIMEOUT = 30
 _RETRIES = 3
+
+#: Tentatives de connexion au broker au démarrage.
+_CONNECT_RETRIES = 12
+_CONNECT_DELAY = 5
 
 
 def load_cities() -> List[Dict[str, Any]]:
@@ -80,11 +85,11 @@ def build_record(city: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any
 
 #: Bornes physiques plausibles (records mondiaux, avec marge).
 #: Une valeur hors bornes est une anomalie de la source, pas une mesure :
-#: elle est mise a NULL plutot que de contaminer les agregats.
+#: elle est mise à NULL plutôt que de contaminer les agrégats.
 MEASUREMENT_BOUNDS: Dict[str, tuple] = {
     "temperature_2m": (-95.0, 65.0),      # °C
     "wind_speed_10m": (0.0, 130.0),       # m/s
-    "wind_direction_10m": (0.0, 360.0),   # degres
+    "wind_direction_10m": (0.0, 360.0),   # degrés
     "precipitation": (0.0, 2000.0),       # mm
     "weather_code": (0.0, 100.0),         # code WMO
 }
@@ -92,10 +97,10 @@ MEASUREMENT_BOUNDS: Dict[str, tuple] = {
 
 def validate_measurements(current: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Met a NULL toute mesure non numerique ou physiquement impossible.
+    Met à NULL toute mesure non numérique ou physiquement impossible.
 
-    Retourne un NOUVEAU dict ; l'entree n'est pas modifiee. Les cles inconnues
-    sont laissees telles quelles (le contrat Open-Meteo peut evoluer).
+    Retourne un NOUVEAU dict, sans modifier l'entrée. Les clés inconnues sont
+    laissées telles quelles (le contrat Open-Meteo peut évoluer).
     """
     checked = dict(current)
     for key, (low, high) in MEASUREMENT_BOUNDS.items():
@@ -107,21 +112,21 @@ def validate_measurements(current: Dict[str, Any]) -> Dict[str, Any]:
         try:
             number = float(value)
         except (TypeError, ValueError):
-            logger.warning("Mesure %s non numerique (%r) : ignoree.", key, value)
+            logger.warning("Mesure %s non numérique (%r) : ignorée.", key, value)
             checked[key] = None
             continue
         if number != number or not (low <= number <= high):  # NaN ou hors bornes
-            logger.warning("Mesure %s hors bornes physiques (%r) : ignoree.", key, value)
+            logger.warning("Mesure %s hors bornes physiques (%r) : ignorée.", key, value)
             checked[key] = None
     return checked
 
 
 def has_usable_measurement(record: Dict[str, Any]) -> bool:
     """
-    Le releve contient-il au moins une mesure exploitable ?
+    Le relevé contient-il au moins une mesure exploitable ?
 
-    Un releve entierement vide n'apporte rien en Bronze et ferait grossir le
-    datalake pour rien ; il est ecarte (et journalise) plutot que publie.
+    Un relevé entièrement vide n'apporte rien en Bronze et fait grossir le
+    datalake pour rien : il est écarté (et journalisé) plutôt que publié.
     """
     return any(record.get(key) is not None
                for key in ("temperature", "windspeed", "precipitation"))
@@ -129,6 +134,8 @@ def has_usable_measurement(record: Dict[str, Any]) -> bool:
 
 def fetch_current(city: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Interroge l'API Open-Meteo (conditions actuelles) avec retries."""
+    import requests
+
     params = {
         "latitude": city["latitude"],
         "longitude": city["longitude"],
@@ -143,15 +150,10 @@ def fetch_current(city: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             resp.raise_for_status()
             data = resp.json()
             current = data.get("current") or {}
-            # ATTENTION : une mesure absente reste ABSENTE (None).
-            # L'ancienne version la remplacait par 0.0 — une valeur
-            # parfaitement plausible pour une temperature en hiver. Le pipeline
-            # ne signalait donc RIEN, mais les moyennes Gold etaient tirees vers
-            # zero, les evenements extremes fausses et le modele ML entraine sur
-            # des valeurs inventees. C'est la pire categorie de panne : un
-            # succes silencieux avec des donnees fausses.
-            # Les colonnes Silver sont nullable : un NULL est correctement
-            # ignore par avg()/min()/max() et par l'entrainement.
+            # Une mesure absente reste absente (None), jamais 0.0. Un 0.0 serait
+            # une température parfaitement plausible en hiver : rien n'échouerait,
+            # mais les moyennes Gold seraient tirées vers zéro et le modèle ML
+            # apprendrait sur des valeurs inventées.
             return validate_measurements(current)
         except requests.RequestException as exc:
             logger.warning("Echec API Open-Meteo pour %s (tentative %d/%d) : %s",
@@ -162,6 +164,8 @@ def fetch_current(city: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 def check_quota(quota_gb: float) -> bool:
     """True si le quota Bronze est atteint (le producteur doit s'arrêter)."""
+    import hdfs_utils
+
     if quota_gb <= 0:
         return False
     import hdfs_utils
@@ -173,18 +177,13 @@ def check_quota(quota_gb: float) -> bool:
         return False
 
 
-#: Tentatives de connexion au broker au demarrage.
-_CONNECT_RETRIES = 12
-_CONNECT_DELAY = 5
-
-
-def connect_producer(bootstrap: str):
+def connect_producer(bootstrap: str, topic: str):
     """
-    Ouvre le producteur Kafka, en patientant si le broker n'est pas encore pret.
+    Ouvre le producteur Kafka, en patientant si le broker n'est pas encore prêt.
 
-    Au demarrage du cluster, Kafka met plusieurs dizaines de secondes a accepter
-    les connexions : sans cette attente, le conteneur sortait en erreur des la
-    premiere seconde et ne publiait jamais rien.
+    Le constructeur de KafkaProducer est paresseux : il ne se connecte pas.
+    On force donc une vraie requête de métadonnées via partitions_for, qui
+    lève KafkaTimeoutError tant que le broker ne répond pas.
     """
     import json as _json
 
@@ -193,15 +192,17 @@ def connect_producer(bootstrap: str):
 
     for attempt in range(1, _CONNECT_RETRIES + 1):
         try:
-            return KafkaProducer(
+            producer = KafkaProducer(
                 bootstrap_servers=bootstrap,
                 value_serializer=lambda v: _json.dumps(v).encode("utf-8"),
                 acks="all",
                 retries=5,
                 linger_ms=200,
             )
+            producer.partitions_for(topic)  # bootstrap réel, bloquant
+            return producer
         except KafkaError as exc:
-            logger.warning("Broker %s pas encore pret (%d/%d) : %s",
+            logger.warning("Broker %s pas encore prêt (%d/%d) : %s",
                            bootstrap, attempt, _CONNECT_RETRIES, exc)
             time.sleep(_CONNECT_DELAY)
     return None
@@ -239,9 +240,9 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _stop_handler)
     signal.signal(signal.SIGINT, _stop_handler)
 
-    producer = connect_producer(bootstrap)
+    producer = connect_producer(bootstrap, topic)
     if producer is None:
-        logger.error("Broker Kafka injoignable (%s) apres %d tentatives.",
+        logger.error("Broker Kafka injoignable (%s) après %d tentatives.",
                      bootstrap, _CONNECT_RETRIES)
         return 1
     logger.info("Producteur démarré : topic=%s, intervalle=%ss, villes=%s, quota=%s Go",
@@ -258,7 +259,7 @@ def main() -> int:
                     continue
                 record = build_record(city, current)
                 if not has_usable_measurement(record):
-                    logger.warning("%s : aucune mesure exploitable, releve ignore.",
+                    logger.warning("%s : aucune mesure exploitable, relevé ignoré.",
                                    city["city"])
                     continue
                 future = producer.send(topic, value=record)

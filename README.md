@@ -23,8 +23,8 @@ Concevoir et implémenter un datalake en architecture Bronze → Silver → Gold
    (`make all` va des tests au Gold vérifié en une commande) ;
 3. **Orchestre** le tout avec **Airflow** : un DAG par couche, dépendances explicites,
    et un DAG interrompu **relançable sans dupliquer** les données ;
-4. **Restitue** via un dashboard Streamlit **et** un notebook Jupyter (lecture directe
-   des tables Gold) ;
+4. **Restitue** via un dashboard Streamlit lisant directement les tables Gold
+   (un service Jupyter reste à disposition pour l'exploration) ;
 5. **Bonus** : prédiction de température à 24h (XGBoost, RMSE cible < 2 °C), bulletins
    météo générés par LLM local (Ollama), réentraînement hebdomadaire automatique.
 
@@ -71,7 +71,7 @@ Concevoir et implémenter un datalake en architecture Bronze → Silver → Gold
 │  ml_predictions · ai_insights (bulletins LLM)                        │
 └──────────┬───────────────────────────────────────────────────────────┘
            ▼
-   Dashboard Streamlit (8501) · Jupyter (8888) · notebooks/
+   Dashboard Streamlit (8501) · Jupyter (8888)
 ```
 
 ### Services Docker
@@ -82,7 +82,7 @@ Concevoir et implémenter un datalake en architecture Bronze → Silver → Gold
 | `datanode` | apache/hadoop:3.3.6 | aucun | Datanode HDFS |
 | `zookeeper` | confluentinc/cp-zookeeper:7.5.3 | 2181 | Coordination Kafka |
 | `kafka` | confluentinc/cp-kafka:7.5.3 | 9092 | Broker (topic `meteo-stream`) |
-| `spark-master` | meteo-spark:3.5.1 (build) | 8080 (UI), 7077, 4040 | Master Spark + driver des jobs |
+| `spark-master` | meteo-spark:3.5.1 (build) | 8081 (UI), 7077, 4040 | Master Spark + driver des jobs |
 | `spark-worker` | meteo-spark:3.5.1 (build) | aucun | Workers Spark |
 | `postgres` | postgres:15-alpine | 5432 | Méta-données Airflow |
 | `airflow-init` | meteo-airflow:2.9.3 (build) | aucun | Migration DB + user admin (one-shot) |
@@ -109,25 +109,22 @@ make all
 |---|---|---|---|
 | 1 | Pré-vol | `doctor` | Vérifie que Docker et `docker compose` v2 répondent |
 | 2 | Images | `build` | Construit les images du projet |
-| 3 | Qualité | `test` | 65 tests unitaires, **exécutés dans un conteneur** |
+| 3 | Qualité | `test` | 62 tests unitaires, **exécutés dans un conteneur** |
 | 4 | Cluster | `up` | `docker compose up -d --build` |
 | 5 | Attente | `wait-services` | Sonde WebHDFS et la santé d'Airflow depuis le réseau Docker |
 | 6 | Init | `init` + `topic` | Répertoires `/bronze` `/silver` `/gold` `/models` `/checkpoints`, puis topic Kafka |
 | 7 | DAGs | `unpause` | Active les quatre DAGs |
-| 8 | Medallion | `pipeline` | Déclenche Bronze, attend Bronze → Silver → Gold |
-| 9 | ML | `ml` | Entraîne XGBoost (`dag_ml_retrain`) **à partir du Silver**, et attend la fin |
-| 10 | Prédictions | `predict` | Rejoue le DAG Gold, modèle en main : `ml_predictions` + bulletin IA |
-| 11 | IA *(si `PROFILE=genai`)* | `genai` | Démarre Ollama et télécharge le modèle LLM |
-| 12 | Contrôle | `verify` | Les trois couches **plus** `ml_predictions` et `ai_insights` |
-| 13 | Sortie | `urls` | Rappelle les interfaces |
+| 8 | Pipeline | `pipeline` | Déclenche Bronze, attend Bronze → Silver → Gold → entraînement → inférence → bulletin |
+| 9 | IA *(si `PROFILE=genai`)* | `genai` | Démarre Ollama et télécharge le modèle LLM |
+| 10 | Contrôle | `verify` | Les trois couches **plus** `ml_predictions` et `ai_insights` |
+| 11 | Vitrine | `showcase` | Exporte les sorties Gold vers `site/data.json` |
+| 12 | Sortie | `urls` | Rappelle les interfaces |
 
-**Pourquoi `ml` vient après `pipeline`, et `predict` après `ml`.** Les features
-d'entraînement se lisent dans `/silver/meteo` : sans Silver, pas de modèle. Et
-sans modèle, pas de prédiction. Au premier passage du DAG Gold, l'inférence se
-retire proprement (aucun modèle sous `/models`) et le bulletin IA part en mode
-fallback ; l'étape `predict` rejoue ce DAG une fois le modèle entraîné —
-`gold_transform` saute alors les partitions déjà calculées (`--only-new`), seules
-l'inférence et le bulletin refont du travail.
+**L'entraînement et l'inférence vivent dans le DAG Gold.** `dag_gold_aggregate`
+calcule les tables Gold, puis entraîne XGBoost si `/models` est vide, puis prédit
+J+1 et génère le bulletin. Un seul déclenchement (`pipeline`) produit donc tout,
+ML compris. Le réentraînement périodique reste confié à `dag_ml_retrain`
+(hebdomadaire) et s'exécute à part, sans rien casser.
 
 Toute étape en échec arrête `make all` avec un code de sortie non nul :
 un « succès » silencieux sur un datalake vide est impossible.
@@ -136,7 +133,7 @@ un « succès » silencieux sur un datalake vide est impossible.
 >
 > **Chaque étape est checkpointée** (`workflow` dans `/checkpoints/medallion/`).
 > Une étape terminée est sautée au passage suivant : `make all` reprend là où il
-> s'est arrêté, quelle qu'ait été la cause de l'arrêt — coupure réseau, `Ctrl-C`,
+> s'est arrêté, quelle qu'ait été la cause de l'arrêt (coupure réseau, `Ctrl-C`,
 > machine éteinte. Relancé après un succès complet, il ne refait rien et se
 > contente d'être vert.
 >
@@ -148,7 +145,7 @@ un « succès » silencieux sur un datalake vide est impossible.
 > ```
 >
 > Les premières étapes (`doctor`, `build`, `test`, `up`, `wait-services`) tournent
-> toujours : elles précèdent HDFS — donc les checkpoints — et sont de toute façon
+> toujours : elles précèdent HDFS (donc les checkpoints) et sont de toute façon
 > quasi instantanées (images en cache, `up` idempotent). Les tests notamment
 > tournent à **chaque** passage : sauter une suite parce qu'elle était verte la
 > fois d'avant est exactement ce qui laisse passer une régression.
@@ -158,13 +155,13 @@ un « succès » silencieux sur un datalake vide est impossible.
 > **Aucun Python, aucun Java, aucun Spark à installer sur la machine.** Les
 > tests eux-mêmes tournent dans l'image du projet
 > (`docker compose run --rm kafka-producer python -m pytest`), et toute la
-> logique d'orchestration — boucles d'attente, sondes WebHDFS, lecture de
-> l'état des DAGs — s'exécute **dans les conteneurs**, via
+> logique d'orchestration (boucles d'attente, sondes WebHDFS, lecture de
+> l'état des DAGs) s'exécute **dans les conteneurs**, via
 > `scripts/pipeline_ctl.py` (Python standard, zéro dépendance).
 >
 > Côté hôte, le `Makefile` n'invoque donc que deux binaires : **`docker`** et
 > **`echo`**. Chaque recette est **une seule commande simple** : ni `echo -e`,
-> ni `2>/dev/null`, ni boucle `bash`, ni `curl`/`grep`/`awk` — rien que
+> ni `2>/dev/null`, ni boucle `bash`, ni `curl`/`grep`/`awk`. Rien que
 > `cmd.exe` ne sache exécuter. Le workflow est identique sous **Windows
 > (PowerShell / cmd), macOS et Linux**.
 >
@@ -195,10 +192,9 @@ make dry-run       # plan d'ingestion Météo-France, hors ligne
 make bronze        # rejoue une couche isolément (idempotent)
 make silver
 make gold
-make ml            # entraîne XGBoost depuis le Silver, et attend la fin
-make predict       # rejoue Gold : prédictions J+1 + bulletin IA
 make checkpoints   # où en est chaque étape (reprise)
 make verify        # re-contrôle l'état des trois couches sur HDFS
+make showcase      # exporte les sorties Gold vers site/data.json (vitrine en ligne)
 make status        # état des conteneurs
 make logs SVC=kafka-producer
 make stop | down | reset | clean
@@ -220,15 +216,14 @@ docker exec ollama ollama pull llama3.2:3b   # télécharge le modèle LLM
 # 3) Ouvrir :
 #    Airflow    http://localhost:8080   (admin / admin)
 #    HDFS UI    http://localhost:9870
-#    Spark UI   http://localhost:8080   (ne pas confondre avec Airflow : 8080 est redirigé)
+#    Spark UI   http://localhost:8081
 #    Jupyter    http://localhost:8888   (token : meteo)
 #    Dashboard  http://localhost:8501
 ```
 
-> ⚠️ **Ports 8080** : Airflow et Spark Master utilisent tous deux 8080 en interne ;
-> dans ce projet **8080 est exposé pour Airflow**, l'UI Spark reste accessible
-> `docker compose exec spark-master curl http://localhost:8080` ou en changeant
-> le mapping de port dans `docker/docker-compose.yml`.
+> ⚠️ **Ports 8080 et 8081** : Airflow et Spark Master utilisent tous deux 8080 en
+> interne. Pour éviter le conflit, Airflow est exposé sur 8080 et l'UI Spark sur
+> 8081 (http://localhost:8081).
 
 Autres commandes : `./deploy.sh status` · `./deploy.sh logs kafka-producer` ·
 `./deploy.sh stop` · `./deploy.sh down` · `./deploy.sh reset` (⚠️ supprime les volumes).
@@ -239,7 +234,7 @@ Autres commandes : `./deploy.sh status` · `./deploy.sh logs kafka-producer` ·
 
 ### 4.1 Batch : archives Météo-France (meteo.data.gouv.fr)
 
-- **Portail** : https://meteo.data.gouv.fr — jeu **« Données climatologiques de base -
+- **Portail** : https://meteo.data.gouv.fr, jeu **« Données climatologiques de base -
   quotidiennes »**, exploré par les notebooks
   [loicduffar/meteo.data-Tools](https://github.com/loicduffar/meteo.data-Tools).
 - **Fichiers** : un CSV gzippé **par département** et par période, variables
@@ -258,7 +253,7 @@ MF_BASE_URL = https://meteofrance.s3.sbg.io.cloud.ovh.net/data/synchro_ftp/BASE/
   numériques ; les unités sont déjà en °C / mm / m·s⁻¹ (aucune division par 10).
   La conversion « vide → NULL » est faite en Silver (`mf_parse_number`).
 - **Départements ingérés** (`MF_DEPARTMENTS`) : `75 69 13 33 59`, soit ceux des cinq
-  villes suivies en temps réel par Open-Meteo — les deux sources se recoupent donc
+  villes suivies en temps réel par Open-Meteo, les deux sources se recoupent donc
   dans les agrégats Gold. La fenêtre `MF_START_YEAR`/`MF_END_YEAR` sélectionne les
   périodes de fichiers à télécharger ; le filtrage fin des dates a lieu en Silver.
 - **Ingestion** : `scripts/meteofrance_ingest.py` construit le plan (département ×
@@ -266,8 +261,6 @@ MF_BASE_URL = https://meteofrance.s3.sbg.io.cloud.ovh.net/data/synchro_ftp/BASE/
 - **Mode `--synthetic`** : si `meteo.data.gouv.fr` est inaccessible (réseau filtré),
   le script génère des `.csv.gz` au **schéma identique** (sinusoïde saisonnière
   bruitée, ~2 % de relevés incomplets), pour une démo de bout en bout.
-- **Source historique facultative** : `scripts/batch_ingest.py` (NOAA GHCN-D) reste
-  disponible et alimente `source=noaa/` ; la couche Silver sait lire les deux.
 
 ### 4.2 Temps réel : Open-Meteo API
 
@@ -301,15 +294,16 @@ MF_BASE_URL = https://meteofrance.s3.sbg.io.cloud.ovh.net/data/synchro_ftp/BASE/
 - **Quota** : le script de monitoring `hdfs_utils.quota_reached('/bronze', quota)`
   arrête automatiquement le producteur Kafka lorsque le Bronze atteint
   **`BRONZE_QUOTA_GB` (10,5 Go par défaut)** ; le DAG Bronze saute alors le streaming.
-- **Budget HDFS** : Bronze ≈ 6,6 Go + Silver ≈ 3,3 Go + Gold ≈ 1,1 Go ≈ **11 Go ≤ 11 Go** ✔
-  (à ajuster via `NOAA_TARGET_GB`, le streaming étant négligeable : ~10 Mo/jour).
+- **Budget HDFS** : les archives Météo-France (5 départements) pèsent quelques Mo
+  et le streaming ajoute ~10 Mo/jour. Le quota `BRONZE_QUOTA_GB` (10,5 Go) borne
+  l'ensemble et arrête le producteur si besoin.
 
 ### 🥈 Silver (validation · dédup · normalisation · indicateurs)
 
 `scripts/silver_transform.py` (DAG `dag_silver_transform`) :
 
 1. **Lecture** des partitions Bronze marquées `_SUCCESS` (CSV `;` gzippés
-   Météo-France, CSV NOAA facultatifs, JSON Open-Meteo) ;
+   Météo-France et JSON Open-Meteo) ;
 2. **Validation du schéma** (colonnes obligatoires, sinon échec explicite :
    `METEOFRANCE_REQUIRED_COLUMNS`, `OPENMETEO_REQUIRED_COLUMNS`) ;
 3. **Déduplication** sur `(station_id, timestamp)` ;
@@ -395,7 +389,7 @@ Choix de conception :
   sert aux tests et à l'usage hors cluster.
 - **Pas de second journal en base.** Le Postgres d'Airflow enregistre déjà l'état,
   les reprises et les durées de chaque tâche, visibles dans son UI : un ledger SQL
-  parallèle ferait doublon. Les checkpoints couvrent ce qu'Airflow ignore — la
+  parallèle ferait doublon. Les checkpoints couvrent ce qu'Airflow ignore : la
   progression *à l'intérieur* d'une tâche.
 - **Jamais bloquant.** Un checkpoint est une optimisation de reprise : si son
   écriture échoue (HDFS indisponible, disque plein), le traitement continue et
@@ -412,7 +406,7 @@ Choix de conception :
 |---|---|---|---|
 | `dag_bronze_ingest` | quotidienne | planifiée ou manuelle | vérif quota → `meteofrance_ingest.py` + `streaming_ingest.py` → déclenche Silver |
 | `dag_silver_transform` | sur déclenchement | automatique (après Bronze) ou manuelle | `silver_transform.py` → déclenche Gold |
-| `dag_gold_aggregate` | sur déclenchement | automatique (après Silver) ou manuelle | `gold_transform.py` → `inference.py` → `genai_summary.py` |
+| `dag_gold_aggregate` | sur déclenchement | automatique (après Silver) ou manuelle | `gold_transform.py` → entraînement (si besoin) → `inference.py` → `genai_summary.py` |
 | `dag_ml_retrain` | hebdomadaire (lun. 03h00) | planifiée ou manuelle | `feature_engineering.py` → `train_model.py` |
 
 Les dépendances entre couches sont **explicites** (`TriggerDagRunOperator`) et chaque
@@ -444,15 +438,16 @@ Résultat : `/gold/meteo/ai_insights/dt=.../bulletin.json`.
 
 ---
 
-## 10. Dashboard & notebooks
+## 10. Dashboard & restitution
 
 - **`dashboard/app.py`** (Streamlit, auto-refresh 30 s) :
   - Vue d'ensemble : KPIs par ville, **carte de France**, évolution 30 jours, événements ;
   - Panneau **ML** (`ml_panel.py`) : prévisions vs réalité, erreurs, confiance ;
   - Panneau **IA** (`genai_panel.py`) : bulletin météo du jour.
   - Lecture HDFS **sans client HDFS** : WebHDFS REST (`dashboard/gold_reader.py`).
-- **`notebooks/dashboard.ipynb`** : version Pandas/Matplotlib/Seaborn des insights.
-- **`notebooks/eda_ml.ipynb`** : EDA de Silver + justification du choix XGBoost.
+- **`ML(SARA)/`** : module ML & GenAI autonome de Sara (`train_model.py`, `predict.py`,
+  `genai_bulletin.py`) avec son guide `README_ML_GENAI.md` et le compte-rendu
+  `TP_DataLake_DataLakehouse.docx`.
 
 ---
 
@@ -463,12 +458,11 @@ make test          # dans un conteneur : aucun Python requis sur la machine
 make test-local    # avec le Python de l'hote, si vous en avez un
 ```
 
-**65 tests, sans Spark ni HDFS** — ils s'exécutent en une à deux secondes.
+**62 tests, sans Spark ni HDFS**. Ils s'exécutent en une à deux secondes.
 
-- `tests/test_transform.py` — fonctions pures historiques : parsing ville/pays NOAA,
-  détection des valeurs manquantes, conversion dixièmes → °C, validation de schéma,
+- `tests/test_transform.py` : fonctions pures : validation de schéma,
   **déduplication**, classification des événements extrêmes, pente de tendance.
-- `tests/test_medallion.py` — la couche Medallion de bout en bout, avec pandas :
+- `tests/test_medallion.py` : la couche Medallion de bout en bout, avec pandas :
   - **Bronze** : convention `source=X/year=YYYY/month=MM`, construction des URLs
     Météo-France, périodes `previous`/`latest`, **idempotence du plan d'ingestion**
     (reprise après interruption), génération et relecture d'un lot `.csv.gz` au
@@ -480,18 +474,18 @@ make test-local    # avec le Python de l'hote, si vous en avez un
   - **Gold** : agrégats quotidiens, `season_of_month`, `rain_day_ratio`,
     `climate_profile` (12 mois × 2 villes, saisonnalité vérifiée) et détection
     d'événements extrêmes sur le Silver produit ;
-  - **Contrôle** : le contrat de `make verify` — couverture des trois couches,
+  - **Contrôle** : le contrat de `make verify` : couverture des trois couches,
     tolérance d'un flux temps réel encore vide, règles de verdict
     (`OK` / `ABSENT` / `SANS _SUCCESS` / `VIDE`) et rendu du rapport ;
   - **Checkpoints** : schéma d'état résilient (fichier corrompu, valeurs
     aberrantes), pureté et idempotence des fonctions de marquage, journal borné,
     aller-retour sur disque, échec d'écriture non bloquant, et surtout le
     **scénario de reprise** : 10 lots, coupure après le 7ᵉ, seuls 3 rejoués ;
-  - **Workflow** : `make all` complet et relançable — coupure après `pipeline`,
-    reprise exacte à `ml` ; `FORCE=1` qui rejoue une étape pourtant terminée ;
+  - **Workflow** : `make all` complet et relançable : coupure pendant `pipeline`,
+    reprise exacte à cette étape ; `FORCE=1` qui rejoue une étape pourtant terminée ;
     garde inerte hors conteneur ; inférence qui se retire proprement sans modèle ;
   - **Orchestration** : l'ordre de la chaîne, les répertoires HDFS créés, et
-    surtout le **franchissement de la frontière Docker** — `namenode_url()` et
+    surtout le **franchissement de la frontière Docker** : `namenode_url()` et
     la construction de la commande `airflow` doivent être correctes *depuis
     l'hôte comme depuis un conteneur*.
 
@@ -500,15 +494,17 @@ make test-local    # avec le Python de l'hote, si vous en avez un
 ## 12. Réponses préparées aux questions du professeur
 
 **Q : Comment construisez-vous un profil client sans historique d'achat ?**
-→ Nous adaptons la question au domaine météo : nous construisons un **profil météo**
-par station (moyennes climatiques, amplitude thermique, jours de pluie, saisonnalité)
-à partir de l'historique NOAA. Ces indicateurs servent de features au modèle de
-prédiction, l'équivalent météo d'un profil client.
+→ Nous adaptons la question au domaine météo : la table Gold `climate_profile`
+construit un **profil météo** par ville (normales de température, amplitude thermique,
+jours de pluie, saison) à partir de l'historique Météo-France. Ces indicateurs
+servent de features au modèle de prédiction,
+l'équivalent météo d'un profil client.
 
 **Q : Où est l'historique d'achat dans la météo ?**
 → L'analogue de l'historique d'achat est **l'historique climatique** : les archives
-NOAA fournissent des décennies d'enregistrements quotidiens. Les séries temporelles
-permettent d'identifier patterns saisonniers, tendances de réchauffement et
+Météo-France (1950-2026) fournissent des décennies d'enregistrements quotidiens.
+Les séries temporelles permettent d'identifier patterns saisonniers, tendances de
+réchauffement et
 événements extrêmes récurrents.
 
 **Q : Comment prédire sans profil ?**
@@ -529,7 +525,6 @@ projet-meteo/
 ├── scripts/
 │   ├── kafka_producer.py           # producteur Open-Meteo → Kafka (5 min, quota)
 │   ├── meteofrance_ingest.py       # ingestion batch Météo-France → Bronze (idempotent)
-│   ├── batch_ingest.py             # ingestion batch NOAA → Bronze (facultative)
 │   ├── streaming_ingest.py         # Spark Structured Streaming Kafka → Bronze
 │   ├── hdfs_utils.py               # client WebHDFS (quotas, _SUCCESS, uploads)
 │   ├── silver_transform.py         # Bronze → Silver (validation, dédup, normalisation)
@@ -537,6 +532,7 @@ projet-meteo/
 │   ├── checkpoint.py               # reprise fine, unité de travail par unité
 │   ├── verify_medallion.py         # contrôle automatique des 3 couches (make verify)
 │   ├── pipeline_ctl.py             # pilote de make all, exécuté dans les conteneurs
+│   ├── export_showcase.py          # exporte les sorties Gold vers site/data.json
 │   └── compress_silver.py          # ré-écriture Silver en Zstd niveau 22
 ├── ml/
 │   ├── feature_engineering.py      # lags, moyennes mobiles, encodages, target J+1
@@ -554,9 +550,7 @@ projet-meteo/
 │   ├── dag_silver_transform.py     # DAG 2 : Bronze → Silver
 │   ├── dag_gold_aggregate.py       # DAG 3 : Silver → Gold + ML + GenAI
 │   └── dag_ml_retrain.py           # DAG 4 : réentraînement hebdo
-├── notebooks/
-│   ├── eda_ml.ipynb                # EDA + justification du modèle
-│   └── dashboard.ipynb             # visualisations Pandas/Matplotlib
+├── ML(SARA)/                       # module ML & GenAI autonome de Sara (+ .docx)
 ├── tests/
 │   ├── conftest.py                 # rend scripts/ importable
 │   ├── test_transform.py           # fonctions pures (sans Spark)
@@ -564,7 +558,9 @@ projet-meteo/
 ├── configs/
 │   ├── spark-defaults.conf         # Zstd 22, overwrite dynamique, mémoire
 │   └── requirements.txt            # dépendances Python
+├── site/                           # vitrine statique (Vercel) : index.html + data.json
 ├── Makefile                        # automatisation complète (make all)
+├── vercel.json                     # configuration de déploiement Vercel
 ├── deploy.sh                       # déploiement en 1 commande
 └── README.md                       # ce document
 ```
@@ -575,7 +571,7 @@ projet-meteo/
 
 ```bash
 # Workflow complet (recommandé) : Docker Desktop + make suffisent
-make all                      # Docker -> tests -> cluster -> Bronze -> Silver -> Gold -> vérification
+make all                      # Docker -> tests -> cluster -> Bronze -> Silver -> Gold -> ML -> vérification -> vitrine
 make help                     # toutes les cibles, sans démarrer de conteneur
 
 # Cluster (équivalents bas niveau)
@@ -607,17 +603,16 @@ streamlit run dashboard/app.py --server.port 8501
 
 ## 15. Résilience : analyse des modes de défaillance
 
-**Le principe.** Un cluster distribué *aura* des pannes : un datanode tombe, une
+**Le principe.** Un cluster distribué aura des pannes : un datanode tombe, une
 API expire, un conteneur est tué par l'OOM killer. L'objectif n'est donc pas
-« aucune panne » — c'est inatteignable et le prétendre serait malhonnête — mais
-**aucune panne non traitée** : chaque défaillance se répare seule, ou s'arrête
-bruyamment au bon endroit avec un message qui nomme sa cause. Jamais de
-corruption silencieuse, jamais de faux vert.
+« aucune panne », ce serait inatteignable, mais aucune panne non traitée.
+Chaque défaillance se répare seule, ou s'arrête bruyamment au bon endroit avec
+un message qui nomme sa cause. Jamais de corruption silencieuse, jamais de faux vert.
 
 ### La panne la plus grave est celle qui ne fait pas d'erreur
 
-Le pire défaut trouvé dans ce projet ne levait aucune exception. `kafka_producer`
-remplaçait toute mesure absente par `0.0` :
+Le pire défaut trouvé dans ce projet ne levait aucune exception. Le producteur
+Kafka remplaçait toute mesure absente par `0.0` :
 
 ```python
 if current.get(key) is None:
@@ -626,18 +621,17 @@ if current.get(key) is None:
 
 Aucun log, aucun échec, aucun test rouge. Mais `0.0 °C` traversait Bronze, était
 conservé par la déduplication Silver, tirait les moyennes Gold vers zéro, faussait
-la détection d'événements extrêmes, et **entraînait le modèle ML sur des valeurs
-inventées**. Une mesure absente reste désormais `NULL` — `avg()`, `min()`, `max()`
-et l'entraînement l'ignorent correctement. Un test verrouille explicitement cette
-régression, et `0.0` reste accepté quand c'est une **vraie** mesure (pas de pluie,
-vent nul).
+la détection d'événements extrêmes, et entraînait le modèle ML sur des valeurs
+inventées. Une mesure absente reste désormais `NULL` : `avg()`, `min()`, `max()`
+et l'entraînement l'ignorent correctement. Un test verrouille cette régression, et
+`0.0` reste accepté quand c'est une vraie mesure (pas de pluie, vent nul).
 
 ### Matrice des défaillances traitées
 
 | Classe | Défaillance | Détection | Réponse |
 |---|---|---|---|
-| **Données** | Mesure absente | — | `NULL`, jamais `0.0` |
-| | Valeur physiquement impossible (`-9999`, `NaN`, texte) | bornes `MEASUREMENT_BOUNDS` | mise à `NULL` + log |
+| **Données** | Mesure absente | - | `NULL`, jamais `0.0` |
+| | Valeur physiquement impossible | bornes `MEASUREMENT_BOUNDS` | mise à `NULL` + log |
 | | Relevé sans aucune mesure | `has_usable_measurement` | non publié |
 | | Champs vides Météo-France | `mf_parse_number` | `NULL`, jamais `0` |
 | | Colonne obligatoire manquante | `validate_required_columns` | **échec explicite** |
@@ -658,45 +652,36 @@ vent nul).
 | **Contrôle** | Datalake vide mais « réussi » | `verify_medallion` | **sortie non nulle** |
 | | Étape ML silencieusement sautée | `verify --with-ml` | **sortie non nulle** |
 
-### Risques résiduels — assumés, pas masqués
+### Risques résiduels, assumés et non masqués
 
-Les nommer vaut mieux que prétendre qu'ils n'existent pas :
-
-1. **Connecteur Spark-Kafka résolu depuis Maven Central au premier lancement**
-   (`--packages spark-sql-kafka-0-10_2.12`). Sur un réseau filtré, la tâche de
-   streaming échoue. Le DAG Bronze survit (`t_trigger_silver` est en
-   `trigger_rule="all_done"`) et la source batch continue de l'alimenter, mais le
-   flux temps réel reste vide. *Mitigation propre : embarquer les JAR dans les
-   images au moment du build. Non fait ici faute de pouvoir vérifier les URLs et
-   les droits du cache Ivy depuis l'environnement de développement — une
-   modification Docker non testée coûte un cycle de build complet.*
+1. **Connecteur Spark-Kafka résolu depuis Maven Central au premier lancement.**
+   Sur un réseau filtré, la tâche de streaming échoue. Le DAG Bronze survit et la
+   source batch continue de l'alimenter, mais le flux temps réel reste vide.
 2. **`foreachBatch` est at-least-once.** Un micro-batch rejoué réécrit ses JSON en
    Bronze. La déduplication Silver les absorbe ; Bronze peut contenir des doublons,
-   ce qui est conforme à sa vocation (format brut).
+   ce qui est conforme à sa vocation de format brut.
 3. **Pas de reprise au niveau ligne** dans les jobs Spark : l'unité de reprise est
    la partition `dt`. Un job tué à mi-partition la recalcule entièrement.
 4. **`_SUCCESS` et données ne sont pas écrits atomiquement.** Un crash entre les
    deux laisse une partition écrite mais non marquée : elle sera recalculée
-   (overwrite dynamique) — coûteux, jamais incorrect.
+   (overwrite dynamique), coûteux mais jamais incorrect.
 5. **Le mode `--synthetic` produit des données vraisemblables, pas réelles.** Il
    sert à démontrer la chaîne quand le réseau bloque, et le dit dans ses logs.
 
 ### Ce qui est vérifié automatiquement
 
-Les garde-fous ci-dessus ne sont pas que des intentions : **65 tests** les
-verrouillent, dont la non-régression du `0.0`, le rejet des valeurs impossibles,
-la présence d'`execution_timeout` et de `max_active_runs=1` dans **chaque** DAG,
-les politiques de redémarrage (et leur absence sur les one-shots), et le scénario
-de reprise après interruption.
+Les garde-fous ci-dessus ne sont pas que des intentions : 62 tests les verrouillent,
+dont la non-régression du `0.0`, le rejet des valeurs impossibles, la présence
+d'`execution_timeout` et de `max_active_runs=1` dans chaque DAG, les politiques de
+redémarrage (et leur absence sur les one-shots), et le scénario de reprise après
+interruption.
 
 ## 16. Notes & limites
 
-- **Météo-France** : les valeurs manquantes sont des **champs vides** (et non des
-  sentinelles `-9999` comme chez NOAA) ; les unités sont déjà en °C / mm / m·s⁻¹.
+- **Météo-France** : les valeurs manquantes sont des **champs vides** (pas de
+  sentinelle numérique) ; les unités sont déjà en °C / mm / m·s⁻¹.
   Si `meteo.data.gouv.fr` est filtré par le réseau, `--synthetic` produit des lots
   au schéma identique et la chaîne complète reste démontrable.
-- **NOAA** (source facultative conservée) : valeurs en dixièmes d'unité (÷10 en
-  Silver), sentinelles `-9999` / `9999` ; ~6,6 Go de téléchargement.
 - Le **partitionnement batch** est fait par lot d'ingestion (année/mois) : c'est une
   convention de dépôt (le sujet n'impose pas le découpage du contenu) ; chaque
   fichier reste brut et n'est stocké qu'une fois. La fenêtre temporelle est appliquée
@@ -707,8 +692,8 @@ de reprise après interruption.
   comme l'extension du fichier cible. La bonne forme est donc
   `CORE-SITE.XML_<propriété>` / `HDFS-SITE.XML_<propriété>`.
 
-  Le préfixe `CORE_CONF_` / `HDFS_CONF_` — omniprésent dans les tutoriels, mais propre
-  aux images `bde2020/hadoop-*` — donne un 2ᵉ segment `conf`, qui figure dans les
+  Le préfixe `CORE_CONF_` / `HDFS_CONF_`, omniprésent dans les tutoriels, mais propre
+  aux images `bde2020/hadoop-*`, donne un 2ᵉ segment `conf`, qui figure dans les
   formats connus du script. Celui-ci appelle alors `transformation.to_conf()`, dont le
   code itère `for key, val in props` sur un **dictionnaire** : le namenode meurt avant
   même de démarrer, sur `ValueError: too many values to unpack`, et Compose signale
@@ -726,7 +711,7 @@ de reprise après interruption.
   `airflow /bin/bash -c ...` → `invalid choice: '/bin/bash'`, sortie 2, et Compose
   n'affiche que `service "airflow-init" didn't complete successfully: exit 2`.
   Écrire `bash` (sans chemin). À noter : `docker compose exec` **ne passe pas** par
-  l'entrypoint — les commandes du `Makefile` (`exec ... python3 ...`) ne sont pas concernées.
+  l'entrypoint. Les commandes du `Makefile` (`exec ... python3 ...`) ne sont pas concernées.
 - **Healthcheck du namenode** : `dfs.namenode.rpc-address: namenode:9000` lie le RPC à
   l'IP résolue du nom d'hôte (`eth0`), **pas à la loopback** : une sonde sur
   `localhost:9000` échoue même namenode parfaitement démarré. D'où les

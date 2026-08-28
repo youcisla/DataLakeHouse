@@ -22,3 +22,6 @@ data/
 
 # Docker
 .dockerignore
+
+# Vercel (dossier local de la CLI)
+.vercel/

@@ -83,13 +83,13 @@ help:  ## Affiche l aide - instantane, aucun conteneur demarre
 	@echo   Pipeline
 	@echo   make pipeline - Declenche Bronze et attend toute la chaine
 	@echo   make bronze - Rejoue une couche isolement, idempotent
-	@echo   make silver - @echo     make gold
-	@echo   make ml - Entraine le modele XGBoost depuis le Silver
-	@echo   make predict - Rejoue Gold : predictions J+1 et bulletin IA
+	@echo   make silver - Rejoue Silver isolement, idempotent
+	@echo   make gold - Rejoue Gold isolement, idempotent
 	@echo   make genai - Bonus : Ollama et bulletins IA
 	@echo   make checkpoints - Etat de reprise des trois etapes
 	@echo   make checkpoints-reset - Vide les checkpoints
 	@echo   make verify - Controle les trois couches sur HDFS
+	@echo   make showcase - Exporte les sorties Gold vers la vitrine en ligne
 	@echo   make urls - Rappelle les interfaces
 	@echo ---
 	@echo   Options
@@ -101,7 +101,7 @@ help:  ## Affiche l aide - instantane, aucun conteneur demarre
 # =============================================================================
 #  LA CIBLE PRINCIPALE : tout le TP, de bout en bout, sans intervention
 # =============================================================================
-all: doctor build test up wait-services init topic unpause pipeline ml predict $(GENAI_STEP) verify urls  ## TOUT : cluster, Bronze, Silver, Gold, ML, predictions, verification. Relancable : reprend ou il s est arrete.
+all: doctor build test up wait-services init topic unpause pipeline $(GENAI_STEP) verify showcase urls  ## TOUT : cluster, Bronze, Silver, Gold, ML, predictions, verification, vitrine en ligne. Relancable : reprend ou il s est arrete.
 	@echo [make] Workflow termine : Medallion, ML et predictions en place et verifies.
 
 re: reset all  ## Reset complet, volumes compris, puis rejoue tout
@@ -174,12 +174,6 @@ silver:  ## Declenche dag_silver_transform, idempotent
 gold:  ## Declenche dag_gold_aggregate, idempotent
 	@$(CTL_AIRFLOW) trigger dag_gold_aggregate
 
-ml:  ## Entraine le modele XGBoost depuis le Silver, et attend la fin
-	@$(CTL_AIRFLOW) ml --timeout $(PIPELINE_TIMEOUT) $(FORCE_FLAG)
-
-predict:  ## Rejoue Gold une fois le modele pret : predictions J+1 et bulletin IA
-	@$(CTL_AIRFLOW) predict --timeout $(PIPELINE_TIMEOUT) $(FORCE_FLAG)
-
 genai:  ## Bonus : demarre Ollama et telecharge le modele des bulletins IA
 	@$(DC) --profile genai up -d ollama
 	@docker exec ollama ollama pull llama3.2:3b
@@ -196,9 +190,13 @@ checkpoints-reset:  ## Vide les checkpoints : tout sera rejoue au prochain run
 verify:  ## Controle sur HDFS que Bronze, Silver, Gold, ML et bulletins sont complets
 	@$(DCX) spark-master python3 /opt/project/scripts/verify_medallion.py --allow-empty-stream --with-ml
 
+showcase:  ## Exporte les sorties Gold vers site/data.json (vitrine en ligne)
+	@$(DCX) spark-master python3 /opt/project/scripts/export_showcase.py
+
 urls:  ## Rappelle les URLs des interfaces
 	@echo [make] Interfaces du datalake :
 	@echo [make]   Airflow     http://localhost:8080    admin / admin
+	@echo [make]   Spark       http://localhost:8081
 	@echo [make]   HDFS        http://localhost:9870
 	@echo [make]   Jupyter     http://localhost:8888    token : meteo
 	@echo [make]   Dashboard   http://localhost:8501

@@ -1,0 +1,9 @@
+# Ne deployer que la vitrine statique (site/) : le reste du depot est du
+# Python, du Docker, de l'Airflow et du Spark qui n'ont pas leur place dans
+# l'environnement de build Vercel. Sans ce filtre, Vercel detecte le depot
+# comme un projet Python et cherche une entrypoint (app.py, main.py...) qui
+# n'existe pas a la racine.
+*
+!site
+!site/**
+!vercel.json

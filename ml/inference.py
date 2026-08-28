@@ -142,9 +142,26 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     spark = _build_spark_session()
 
-    df = spark.read.parquet("/silver/meteo")
-    max_dt = df.select(F.max("dt").alias("max_dt")).collect()[0]["max_dt"]
-    cutoff = (datetime.strptime(max_dt, "%Y-%m-%d") - timedelta(days=args.days)).strftime("%Y-%m-%d")
+    try:
+        df = spark.read.parquet("/silver/meteo")
+    except Exception as exc:
+        print(f"Silver illisible ({exc}) : inference sautée (aucune donnée à prédire).")
+        spark.stop()
+        return 0
+
+    # F.max("dt") renvoie un datetime.date (colonne DateType), pas une chaîne :
+    # on normalise le type avant de calculer la fenêtre.
+    row = df.select(F.max("dt").alias("max_dt")).first()
+    max_dt = row["max_dt"] if row else None
+    if max_dt is None:
+        print("Silver vide : inference sautée (aucune donnée à prédire).")
+        spark.stop()
+        return 0
+    if isinstance(max_dt, str):
+        max_dt = datetime.strptime(max_dt, "%Y-%m-%d").date()
+    elif isinstance(max_dt, datetime):
+        max_dt = max_dt.date()
+    cutoff = (max_dt - timedelta(days=args.days)).strftime("%Y-%m-%d")
     logger.info("Fenêtre Silver : dt >= %s (max(dt) = %s)", cutoff, max_dt)
     df = df.filter(F.col("dt") >= cutoff)
 
