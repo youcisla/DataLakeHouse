@@ -62,9 +62,12 @@ def _request(method: str, path: str, params: Optional[Dict[str, Any]] = None,
                 location = resp.headers["Location"]
                 logger.debug("Redirection WebHDFS vers %s", location)
                 resp = requests.request(method, location, timeout=REQUEST_TIMEOUT, **kwargs)
+            if resp.status_code == 404:
+                # Absent = réponse NORMALE pour exists()/read sur un fichier
+                # inexistant : on ne retente pas (gain ~30 s par vérification).
+                raise IOError(f"WebHDFS {method} {path} -> HTTP 404 (absent)")
             if resp.status_code < 400:
                 return resp
-            # 404 sur exists() est géré par l'appelant
             last_exc = IOError(f"WebHDFS {method} {path} -> HTTP {resp.status_code}: {resp.text[:300]}")
         except requests.RequestException as exc:  # réseau / timeouts
             last_exc = exc
