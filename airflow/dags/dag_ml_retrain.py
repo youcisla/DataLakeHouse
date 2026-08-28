@@ -26,6 +26,7 @@ DEFAULT_ARGS = {
     "email_on_failure": False,
     "retries": 2,
     "retry_delay": timedelta(minutes=5),
+    "execution_timeout": timedelta(hours=3),
     "start_date": datetime(2024, 1, 1),
 }
 
@@ -35,6 +36,7 @@ with DAG(
     default_args=DEFAULT_ARGS,
     schedule_interval="0 3 * * 1",   # chaque lundi à 03h00
     catchup=False,
+    max_active_runs=1,
     tags=["ml", "retrain"],
 ) as dag:
 

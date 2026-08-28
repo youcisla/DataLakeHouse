@@ -36,6 +36,7 @@ DEFAULT_ARGS = {
     "email_on_failure": False,
     "retries": 2,
     "retry_delay": timedelta(minutes=2),
+    "execution_timeout": timedelta(hours=2),
     "start_date": datetime(2024, 1, 1),
     "catchup": False,
 }
@@ -46,6 +47,7 @@ with DAG(
     default_args=DEFAULT_ARGS,
     schedule_interval="@daily",
     catchup=False,
+    max_active_runs=1,
     tags=["bronze", "ingestion"],
 ) as dag:
 

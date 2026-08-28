@@ -16,7 +16,8 @@ RUN pip install --no-cache-dir \
     streamlit==1.33.0 \
     plotly==5.18.0 \
     streamlit-autorefresh==1.0.1 \
-    pytest==8.0.0
+    pytest==8.0.0 \
+    PyYAML==6.0.1
 
 WORKDIR /opt/project
 ENV PYTHONPATH=/opt/project/scripts

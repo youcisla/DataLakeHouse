@@ -109,7 +109,7 @@ make all
 |---|---|---|---|
 | 1 | Pré-vol | `doctor` | Vérifie que Docker et `docker compose` v2 répondent |
 | 2 | Images | `build` | Construit les images du projet |
-| 3 | Qualité | `test` | 53 tests unitaires, **exécutés dans un conteneur** |
+| 3 | Qualité | `test` | 62 tests unitaires, **exécutés dans un conteneur** |
 | 4 | Cluster | `up` | `docker compose up -d --build` |
 | 5 | Attente | `wait-services` | Sonde WebHDFS et la santé d'Airflow depuis le réseau Docker |
 | 6 | Init | `init` + `topic` | Répertoires `/bronze` `/silver` `/gold` `/models` `/checkpoints`, puis topic Kafka |
@@ -459,7 +459,7 @@ make test          # dans un conteneur : aucun Python requis sur la machine
 make test-local    # avec le Python de l'hote, si vous en avez un
 ```
 
-**53 tests, sans Spark ni HDFS**. Ils s'exécutent en une à deux secondes.
+**62 tests, sans Spark ni HDFS**. Ils s'exécutent en une à deux secondes.
 
 - `tests/test_transform.py` : fonctions pures : validation de schéma,
   **déduplication**, classification des événements extrêmes, pente de tendance.
@@ -602,7 +602,82 @@ streamlit run dashboard/app.py --server.port 8501
 
 ---
 
-## 15. Notes & limites
+## 15. Résilience : analyse des modes de défaillance
+
+**Le principe.** Un cluster distribué aura des pannes : un datanode tombe, une
+API expire, un conteneur est tué par l'OOM killer. L'objectif n'est donc pas
+« aucune panne », ce serait inatteignable, mais aucune panne non traitée.
+Chaque défaillance se répare seule, ou s'arrête bruyamment au bon endroit avec
+un message qui nomme sa cause. Jamais de corruption silencieuse, jamais de faux vert.
+
+### La panne la plus grave est celle qui ne fait pas d'erreur
+
+Le pire défaut trouvé dans ce projet ne levait aucune exception. Le producteur
+Kafka remplaçait toute mesure absente par `0.0` :
+
+```python
+if current.get(key) is None:
+    current[key] = 0.0        # 0 °C : une valeur parfaitement plausible
+```
+
+Aucun log, aucun échec, aucun test rouge. Mais `0.0 °C` traversait Bronze, était
+conservé par la déduplication Silver, tirait les moyennes Gold vers zéro, faussait
+la détection d'événements extrêmes, et entraînait le modèle ML sur des valeurs
+inventées. Une mesure absente reste désormais `NULL` : `avg()`, `min()`, `max()`
+et l'entraînement l'ignorent correctement. Un test verrouille cette régression, et
+`0.0` reste accepté quand c'est une vraie mesure (pas de pluie, vent nul).
+
+### Matrice des défaillances traitées
+
+| Classe | Défaillance | Détection | Réponse |
+|---|---|---|---|
+| **Données** | Mesure absente | - | `NULL`, jamais `0.0` |
+| | Valeur physiquement impossible | bornes `MEASUREMENT_BOUNDS` | mise à `NULL` + log |
+| | Relevé sans aucune mesure | `has_usable_measurement` | non publié |
+| | Champs vides Météo-France | `mf_parse_number` | `NULL`, jamais `0` |
+| | Colonne obligatoire manquante | `validate_required_columns` | **échec explicite** |
+| | Doublons (checkpoint Kafka perdu) | dédup `(station_id, timestamp)` | éliminés en Silver |
+| **Réseau** | `meteo.data.gouv.fr` injoignable | code retour | repli `--synthetic` |
+| | Open-Meteo en erreur | 3 tentatives + backoff | ville sautée, cycle poursuivi |
+| | Broker Kafka pas encore prêt | `connect_producer` | 12 tentatives × 5 s |
+| | Ollama absent | `genai_summary` | bulletin de repli (règles) |
+| **Ressources** | Quota Bronze atteint | `quota_reached` | producteur et DAG s'arrêtent |
+| | HDFS muet pour un checkpoint | exception capturée | avertissement, le traitement continue |
+| | Tâche bloquée sans fin | `execution_timeout` | tuée puis relancée (`retries=2`) |
+| **Cycle de vie** | Crash transitoire d'un service | Docker | `restart: unless-stopped` (sauf one-shots) |
+| | Aucun modèle sous `/models` | `model_available` | inférence sautée, code 0 |
+| | Interruption en cours d'ingestion | checkpoints | reprise à l'unité près |
+| | `make all` interrompu | checkpoints `workflow` | reprend à l'étape suivante |
+| **Concurrence** | Deux exécutions du même DAG | `max_active_runs=1` | la seconde attend |
+| | Réécriture d'une partition | overwrite dynamique + `_SUCCESS` | idempotent |
+| **Contrôle** | Datalake vide mais « réussi » | `verify_medallion` | **sortie non nulle** |
+| | Étape ML silencieusement sautée | `verify --with-ml` | **sortie non nulle** |
+
+### Risques résiduels, assumés et non masqués
+
+1. **Connecteur Spark-Kafka résolu depuis Maven Central au premier lancement.**
+   Sur un réseau filtré, la tâche de streaming échoue. Le DAG Bronze survit et la
+   source batch continue de l'alimenter, mais le flux temps réel reste vide.
+2. **`foreachBatch` est at-least-once.** Un micro-batch rejoué réécrit ses JSON en
+   Bronze. La déduplication Silver les absorbe ; Bronze peut contenir des doublons,
+   ce qui est conforme à sa vocation de format brut.
+3. **Pas de reprise au niveau ligne** dans les jobs Spark : l'unité de reprise est
+   la partition `dt`. Un job tué à mi-partition la recalcule entièrement.
+4. **`_SUCCESS` et données ne sont pas écrits atomiquement.** Un crash entre les
+   deux laisse une partition écrite mais non marquée : elle sera recalculée
+   (overwrite dynamique), coûteux mais jamais incorrect.
+5. **Le mode `--synthetic` produit des données vraisemblables, pas réelles.** Il
+   sert à démontrer la chaîne quand le réseau bloque, et le dit dans ses logs.
+
+### Ce qui est vérifié automatiquement
+
+Les garde-fous ci-dessus ne sont pas que des intentions : 62 tests les verrouillent,
+dont la non-régression du `0.0`, le rejet des valeurs impossibles, la présence
+d'`execution_timeout` et de `max_active_runs=1` dans chaque DAG, les politiques de
+redémarrage (et leur absence sur les one-shots), et le scénario de reprise après
+interruption.
+
+## 16. Notes & limites
 
 - **Météo-France** : les valeurs manquantes sont des **champs vides** (pas de
   sentinelle numérique) ; les unités sont déjà en °C / mm / m·s⁻¹.

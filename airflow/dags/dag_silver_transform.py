@@ -33,6 +33,7 @@ DEFAULT_ARGS = {
     "email_on_failure": False,
     "retries": 2,
     "retry_delay": timedelta(minutes=3),
+    "execution_timeout": timedelta(hours=2),
     "start_date": datetime(2024, 1, 1),
 }
 
@@ -42,6 +43,7 @@ with DAG(
     default_args=DEFAULT_ARGS,
     schedule_interval=None,          # déclenché par dag_bronze_ingest ou manuellement
     catchup=False,
+    max_active_runs=1,
     tags=["silver", "transformation"],
 ) as dag:
 
