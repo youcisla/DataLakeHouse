@@ -102,7 +102,7 @@ case "${1:-up}" in
     info "======================================================"
     info " Cluster prêt :"
     info "  - HDFS UI     : http://localhost:9870"
-    info "  - Spark UI    : http://localhost:8080"
+    info "  - Spark UI    : http://localhost:8081"
     info "  - Airflow     : http://localhost:8080/  (admin / admin)"
     info "  - Jupyter     : http://localhost:8888/  (token: meteo)"
     info "  - Dashboard   : http://localhost:8501"

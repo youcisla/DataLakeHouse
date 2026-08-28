@@ -163,7 +163,7 @@ services:
       SPARK_RPC_ENCRYPTION_ENABLED: "no"
       SPARK_LOCAL_IP: spark-master
     ports:
-      - "8080:8080"   # UI Spark Master
+      - "8081:8080"   # UI Spark Master (8080 est réservé à Airflow)
       - "7077:7077"   # Standalone
       - "4040:4040"   # UI du driver Spark (à la demande)
     volumes:

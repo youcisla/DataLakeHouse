@@ -486,6 +486,7 @@ def cmd_urls(args: argparse.Namespace) -> int:
     print("")
     print("  Interfaces du datalake")
     print("  Airflow     http://localhost:8080     (admin / admin)")
+    print("  Spark       http://localhost:8081")
     print("  HDFS        http://localhost:9870")
     print("  Jupyter     http://localhost:8888     (token : meteo)")
     print("  Dashboard   http://localhost:8501")

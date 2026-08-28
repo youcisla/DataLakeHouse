@@ -82,7 +82,7 @@ Concevoir et implémenter un datalake en architecture Bronze → Silver → Gold
 | `datanode` | apache/hadoop:3.3.6 | aucun | Datanode HDFS |
 | `zookeeper` | confluentinc/cp-zookeeper:7.5.3 | 2181 | Coordination Kafka |
 | `kafka` | confluentinc/cp-kafka:7.5.3 | 9092 | Broker (topic `meteo-stream`) |
-| `spark-master` | meteo-spark:3.5.1 (build) | 8080 (UI), 7077, 4040 | Master Spark + driver des jobs |
+| `spark-master` | meteo-spark:3.5.1 (build) | 8081 (UI), 7077, 4040 | Master Spark + driver des jobs |
 | `spark-worker` | meteo-spark:3.5.1 (build) | aucun | Workers Spark |
 | `postgres` | postgres:15-alpine | 5432 | Méta-données Airflow |
 | `airflow-init` | meteo-airflow:2.9.3 (build) | aucun | Migration DB + user admin (one-shot) |
@@ -216,15 +216,14 @@ docker exec ollama ollama pull llama3.2:3b   # télécharge le modèle LLM
 # 3) Ouvrir :
 #    Airflow    http://localhost:8080   (admin / admin)
 #    HDFS UI    http://localhost:9870
-#    Spark UI   http://localhost:8080   (ne pas confondre avec Airflow : 8080 est redirigé)
+#    Spark UI   http://localhost:8081
 #    Jupyter    http://localhost:8888   (token : meteo)
 #    Dashboard  http://localhost:8501
 ```
 
-> ⚠️ **Ports 8080** : Airflow et Spark Master utilisent tous deux 8080 en interne ;
-> dans ce projet **8080 est exposé pour Airflow**, l'UI Spark reste accessible
-> `docker compose exec spark-master curl http://localhost:8080` ou en changeant
-> le mapping de port dans `docker/docker-compose.yml`.
+> ⚠️ **Ports 8080 et 8081** : Airflow et Spark Master utilisent tous deux 8080 en
+> interne. Pour éviter le conflit, Airflow est exposé sur 8080 et l'UI Spark sur
+> 8081 (http://localhost:8081).
 
 Autres commandes : `./deploy.sh status` · `./deploy.sh logs kafka-producer` ·
 `./deploy.sh stop` · `./deploy.sh down` · `./deploy.sh reset` (⚠️ supprime les volumes).
