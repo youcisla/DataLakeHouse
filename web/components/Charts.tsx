@@ -111,7 +111,6 @@ export function PredictionScatter({ data, height = 320 }: {
   data: { city: string; actual: number; predicted: number }[]; height?: number;
 }) {
   const c = useChartColors();
-  const cities = [...new Set(data.map((d) => d.city))];
   const all = data.flatMap((d) => [d.actual, d.predicted]);
   const mn = Math.min(...all) - 1, mx = Math.max(...all) + 1;
   const option = {
@@ -120,15 +119,15 @@ export function PredictionScatter({ data, height = 320 }: {
     legend: { top: 0, textStyle: { color: c.muted, fontSize: 12 }, icon: "circle", itemWidth: 9, itemHeight: 9 },
     tooltip: { ...TOOLTIP, backgroundColor: c.tooltip, borderColor: c.border,
       textStyle: { color: c.text, fontSize: 12 },
-      formatter: (p: any) => p.seriesName + "<br/>réel " + p.value[0].toFixed(1) + " · prédit " + p.value[1].toFixed(1) + " °C" },
+      formatter: (p: any) => p.name + "<br/>réel " + p.value[0].toFixed(1) + " · prédit " + p.value[1].toFixed(1) + " °C" },
     xAxis: { type: "value", name: "réel °C", min: mn, max: mx, splitLine: { lineStyle: { color: c.grid } },
       axisLabel: { color: c.muted, fontSize: 11 } },
     yAxis: { type: "value", name: "prédit °C", min: mn, max: mx, splitLine: { lineStyle: { color: c.grid } },
       axisLabel: { color: c.muted, fontSize: 11 } },
     series: [
-      ...cities.map((city) => ({ name: city, type: "scatter", symbolSize: 9,
-        data: data.filter((d) => d.city === city).map((d) => [d.actual, d.predicted]),
-        itemStyle: { color: cityColor(city) } })),
+      { name: "Points prédits", type: "scatter", symbolSize: 7,
+        data: data.map((d) => ({ name: d.city, value: [d.actual, d.predicted] })),
+        itemStyle: { color: "rgba(125, 160, 210, 0.55)" } },
       { type: "line", name: "y = x", data: [[mn, mn], [mx, mx]], symbol: "none",
         lineStyle: { color: c.axis, width: 1, type: "dashed" }, silent: true,
         tooltip: { show: false }, legendHoverLink: false },

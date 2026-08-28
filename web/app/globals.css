@@ -132,7 +132,8 @@ button.toggle:hover { border-color: var(--accent); }
 .controlgroup { display: flex; gap: 6px; flex-wrap: wrap; }
 .chipbtn { font: inherit; font-size: 13px; cursor: pointer; padding: 6px 14px;
   border-radius: 999px; border: 1px solid var(--border); background: var(--surface);
-  color: var(--text-secondary); transition: color .15s, border-color .15s, background .15s; }
+  color: var(--text-secondary); transition: color .15s, border-color .15s, background .15s;
+  white-space: nowrap; }
 .chipbtn:hover { border-color: var(--axis); }
 .chipbtn.on { color: var(--text-primary); border-color: var(--accent); font-weight: 600;
   background: var(--accent-soft); }

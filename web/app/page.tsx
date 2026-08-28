@@ -65,9 +65,10 @@ export default function Page() {
   const latestWeek = new Map<string, (typeof weekly)[number]>();
   for (const w of weekly) {
     if (!active.includes(w.city)) continue;
-    const key = w.year + "-" + w.week;
-    const cur = latestWeek.get(key);
-    if (!cur) latestWeek.set(key, w);
+    const cur = latestWeek.get(w.city);
+    const wKey = w.year * 100 + w.week;
+    const curKey = cur ? cur.year * 100 + cur.week : -1;
+    if (!cur || wKey > curKey) latestWeek.set(w.city, w);
   }
   const deltaData = [...latestWeek.values()]
     .filter((w) => w.temp_vs_prev_week !== null)
