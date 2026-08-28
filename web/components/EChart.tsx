@@ -16,8 +16,8 @@ echarts.use([
   CanvasRenderer,
 ]);
 
-export default function EChart({ option, height = 320, onClick }: {
-  option: any; height?: number; onClick?: (p: any) => void;
+export default function EChart({ option, height = 320, onClick, ariaLabel }: {
+  option: any; height?: number; onClick?: (p: any) => void; ariaLabel?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
@@ -40,5 +40,5 @@ export default function EChart({ option, height = 320, onClick }: {
 
   useEffect(() => { chartRef.current?.setOption(option, true); }, [option]);
 
-  return <div ref={ref} style={{ width: "100%", height }} />;
+  return <div ref={ref} style={{ width: "100%", height }} role="img" aria-label={ariaLabel} />;
 }

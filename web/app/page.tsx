@@ -114,7 +114,6 @@ export default function Page() {
       </nav>
 
       <header className="hero">
-        <p className="kicker">Bronze · Silver · Gold</p>
         <h1>Le climat de <em>cinq villes</em> françaises, en un coup d’œil.</h1>
         <p className="sub">{meta.source_batch} · {meta.source_stream}</p>
         <div className="badges">
@@ -131,7 +130,8 @@ export default function Page() {
           const latest = rows[rows.length - 1];
           const spark = rows.slice(-7).map((r) => r.temp_avg);
           return (
-            <div key={city} className="nowcard" onClick={() => focusCity(city)}
+            <button type="button" key={city} className="nowcard" onClick={() => focusCity(city)}
+              aria-pressed={active.includes(city)}
               style={{ opacity: active.includes(city) ? 1 : 0.4 }}>
               <div className="top" style={{ color: cityColor(city) }}>
                 <WeatherIcon kind={tempIcon(latest?.temp_avg ?? null, latest?.precip_sum ?? null)} size={18} />
@@ -142,7 +142,7 @@ export default function Page() {
                 {latest?.precip_sum != null ? formatNumber(latest.precip_sum) + " mm de pluie" : "pas de donnée"}
               </div>
               <div className="nspark"><Sparkline data={spark} color={cityColor(city)} height={36} /></div>
-            </div>
+            </button>
           );
         })}
       </section>
@@ -182,20 +182,23 @@ export default function Page() {
       <section className="controls">
         <div className="controlgroup">
           {PERIODS.map((p) => (
-            <button key={p.label} className={"chipbtn" + (period === p.days ? " on" : "")} onClick={() => setPeriod(p.days)}>{p.label}</button>
+            <button key={p.label} className={"chipbtn" + (period === p.days ? " on" : "")} onClick={() => setPeriod(p.days)} aria-pressed={period === p.days}>{p.label}</button>
           ))}
         </div>
         <div className="controlgroup">
           {CITY_ORDER.map((c) => (
-            <button key={c} className={"chipbtn dot" + (active.includes(c) ? " on" : "")} onClick={() => toggleCity(c)}>
+            <button key={c} className={"chipbtn dot" + (active.includes(c) ? " on" : "")} onClick={() => toggleCity(c)} aria-pressed={active.includes(c)}>
               <span className="dot" style={{ background: cityColor(c) }} />{c}
             </button>
           ))}
+          {active.length !== allCities.length ? (
+            <button type="button" className="chipbtn ghost" onClick={() => setActive(allCities)}>Toutes les villes</button>
+          ) : null}
         </div>
       </section>
 
       <section id="carte">
-        <h2><span className="num">01</span> Carte de France</h2>
+        <h2>Carte de France</h2>
         <blockquote>Où fait-il le plus chaud en ce moment ?</blockquote>
         <div className="duo mapduo">
           <div className="card"><FranceMap points={mapPoints} selected={active.length === 1 ? active[0] : null} onSelect={focusCity} /></div>
@@ -215,11 +218,11 @@ export default function Page() {
       </section>
 
       <section id="temp">
-        <h2><span className="num">02</span> Températures</h2>
+        <h2>Températures</h2>
         <blockquote>Comment la température évolue-t-elle sur la fenêtre ?</blockquote>
         <div className="seg">
           {METRICS.map((m) => (
-            <button key={m.id} className={"segbtn" + (metric === m.id ? " on" : "")} onClick={() => setMetric(m.id)}>{m.label}</button>
+            <button key={m.id} className={"segbtn" + (metric === m.id ? " on" : "")} onClick={() => setMetric(m.id)} aria-pressed={metric === m.id}>{m.label}</button>
           ))}
         </div>
         <div className="card">
@@ -229,7 +232,7 @@ export default function Page() {
       </section>
 
       <section id="pluie">
-        <h2><span className="num">03</span> Précipitations</h2>
+        <h2>Précipitations</h2>
         <blockquote>Quels jours ont été les plus arrosés ?</blockquote>
         <div className="card">
           {rainSeries.length ? <GroupedBars data={rainSeries} cities={cities} height={340} /> : <Empty what="précipitations" />}
@@ -238,7 +241,7 @@ export default function Page() {
       </section>
 
       <section id="climat">
-        <h2><span className="num">04</span> Profil climatique mensuel</h2>
+        <h2>Profil climatique mensuel</h2>
         <blockquote>Quelle est la normale de température de chaque ville, mois par mois ?</blockquote>
         <div className="card">
           {heatData.length ? <ClimateHeatmap data={heatData} months={MONTHS} cities={cities} height={380} /> : <Empty what="profil climatique" />}
@@ -247,7 +250,7 @@ export default function Page() {
       </section>
 
       <section id="ml">
-        <h2><span className="num">05</span> Prédictions ML (J+1)</h2>
+        <h2>Prédictions ML (J+1)</h2>
         <blockquote>Le modèle XGBoost prédit-il bien la température du lendemain ?</blockquote>
         <div className="card">
           {predData.length ? <PredictionScatter data={predData} height={380} /> : <Empty what="prédictions" />}
@@ -256,7 +259,7 @@ export default function Page() {
       </section>
 
       <section id="tendance">
-        <h2><span className="num">06</span> Tendances hebdomadaires</h2>
+        <h2>Tendances hebdomadaires</h2>
         <blockquote>Quelle ville se réchauffe ou se refroidit le plus d’une semaine à l’autre ?</blockquote>
         <div className="card">
           {deltaData.length ? <WeeklyDelta data={deltaData} height={360} /> : <Empty what="tendances hebdomadaires" />}
@@ -265,7 +268,7 @@ export default function Page() {
       </section>
 
       <section id="extrêmes">
-        <h2><span className="num">07</span> Événements extrêmes</h2>
+        <h2>Événements extrêmes</h2>
         <blockquote>Quels seuils ont été franchis, et à quelle sévérité ?</blockquote>
         <div className="extgrid">
           {donutData.length ? (
@@ -295,7 +298,7 @@ export default function Page() {
 
       {bulletin?.bulletin ? (
         <section id="bulletin">
-          <h2><span className="num">08</span> Bulletin météo généré</h2>
+          <h2>Bulletin météo généré</h2>
           <blockquote>Une synthèse rédigée, générée depuis les tables Gold.</blockquote>
           <div className="card bulletin">{bulletin.bulletin}</div>
         </section>
