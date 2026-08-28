@@ -47,7 +47,7 @@ GOLD_PREDICTIONS = "/gold/meteo/ml_predictions"
 def _build_spark_session():
     """Crée une session Spark (import paresseux : le module s'importe sans Spark)."""
     from pyspark.sql import SparkSession  # pylint: disable=import-outside-toplevel
-    return SparkSession.builder.appName("inference_meteo").getOrCreate()
+    return SparkSession.builder.master("spark://spark-master:7077").appName("inference_meteo").getOrCreate()
 
 
 def model_available() -> bool:

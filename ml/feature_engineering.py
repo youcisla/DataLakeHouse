@@ -153,7 +153,7 @@ def build_features(
 def _build_spark_session():
     """Crée une session Spark (import paresseux : le module s'importe sans Spark)."""
     from pyspark.sql import SparkSession  # pylint: disable=import-outside-toplevel
-    return SparkSession.builder.appName("feature_engineering_meteo").getOrCreate()
+    return SparkSession.builder.master("spark://spark-master:7077").appName("feature_engineering_meteo").getOrCreate()
 
 
 def main(argv: Optional[List[str]] = None) -> int:
