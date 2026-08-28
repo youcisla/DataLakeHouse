@@ -671,6 +671,25 @@ des minutes au lieu de quelques secondes.
 
 Sur vercel.com : **New Project** → importer le dépôt → **Root Directory : `web`**.
 Aucune variable d'environnement : le site ne contacte aucun service à l'exécution.
+`web/vercel.json` fige `framework: nextjs`, donc le déploiement ne dépend ni de
+l'heuristique de détection ni d'un réglage oublié dans le tableau de bord.
+
+### Le piège Python à connaître
+
+Vercel cherche un point d'entrée Python — `app.py`, `index.py`, `server.py`,
+`main.py`, `wsgi.py`, `asgi.py` — à la racine du projet **et dans `src/` ou
+`app/`** ([doc](https://vercel.com/docs/functions/runtimes/python#python-entrypoints)).
+Or l'App Router de Next.js vit précisément dans `web/app/`.
+
+Un seul `web/app/index.py` suffirait donc à faire basculer le projet sur le
+runtime Python : le site cesserait de se construire, sans que la cause soit
+évidente. Même chose pour un `requirements.txt` ou un `pyproject.toml` déposé
+dans `web/`, qui déclencherait la détection d'un framework Python.
+
+**Un test verrouille les deux cas.** Le Python du projet (ingestion, jobs Spark,
+export) ne tourne jamais sur Vercel : il s'exécute dans les conteneurs, et seul
+son *résultat* — les JSON — est déployé. `.vercelignore` exclut d'ailleurs
+`scripts/`, `ml/`, `docker/` et le reste du dépôt de l'upload.
 
 ### Choix de visualisation
 
