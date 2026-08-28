@@ -20,9 +20,13 @@ Conséquences assumées :
 
 ```bash
 make export-web     # génère public/data/*.json depuis les tables Gold
-make web-install    # npm install
+make web-install    # npm install, dans un conteneur node
 make web-dev        # http://localhost:3000
 ```
+
+Node tourne **dans un conteneur** (`profiles: ["web"]`, il ne démarre donc pas
+avec `make all`). Rien à installer sur la machine, et `node_modules` reste dans
+un volume Docker plutôt que sur le disque monté.
 
 ## Déploiement Vercel
 

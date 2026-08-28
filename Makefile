@@ -189,14 +189,14 @@ genai:  ## Bonus : demarre Ollama et telecharge le modele des bulletins IA
 export-web:  ## Exporte les tables Gold en JSON pour le site Next.js
 	@$(DCX) spark-master python3 /opt/project/scripts/export_web.py --days $(WEB_WINDOW_DAYS)
 
-web-install:  ## Installe les dependances du site - necessite Node sur la machine
-	@cd web && npm install
+web-install:  ## Installe les dependances du site - dans un conteneur node
+	@$(DC) --profile web run --rm web npm install
 
-web-dev:  ## Lance le site en local sur http://localhost:3000
-	@cd web && npm run dev
+web-dev:  ## Lance le site sur http://localhost:3000 - dans un conteneur node
+	@$(DC) --profile web run --rm --service-ports web npm run dev
 
 web-build:  ## Build de production du site - verifie avant de deployer
-	@cd web && npm run build
+	@$(DC) --profile web run --rm web npm run build
 
 checkpoints:  ## Affiche l etat de reprise des trois etapes
 	@$(DCX) spark-master python3 /opt/project/scripts/pipeline_ctl.py checkpoints

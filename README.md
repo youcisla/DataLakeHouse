@@ -654,10 +654,18 @@ tables Gold ──(make export-web)──> web/public/data/*.json ──(build)�
 
 ```bash
 make export-web     # tables Gold -> web/public/data/*.json
-make web-install    # npm install (une fois)
+make web-install    # npm install, DANS un conteneur node (une fois)
 make web-dev        # http://localhost:3000
 make web-build      # vérifie le build avant de pousser
 ```
+
+Comme le reste du projet, **Node tourne dans un conteneur** : rien à installer
+sur la machine. `node_modules` vit dans un volume Docker nommé et non sur le
+montage Windows — y écrire des dizaines de milliers de petits fichiers prend
+des minutes au lieu de quelques secondes.
+
+> Sous **PowerShell**, `&&` n'est pas un séparateur valide (avant PowerShell 7) :
+> lancez les commandes une par une, ou séparez-les par `;`.
 
 Sur vercel.com : **New Project** → importer le dépôt → **Root Directory : `web`**.
 Aucune variable d'environnement : le site ne contacte aucun service à l'exécution.

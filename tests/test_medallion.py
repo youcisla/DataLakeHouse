@@ -1278,3 +1278,49 @@ def test_city_colour_order_is_fixed_not_ranked():
     # Les cinq villes du projet sont bien dans l'ordre fixe.
     for city in ("Paris", "Lyon", "Marseille", "Bordeaux", "Lille"):
         assert f'"{city}"' in source
+
+
+def test_export_fails_loudly_on_empty_gold(tmp_path, monkeypatch, capsys):
+    """
+    Un site publie sans donnees est un faux vert : l'export doit sortir en
+    erreur, pas produire une vitrine vide en silence.
+    """
+    monkeypatch.setattr(export_web, "read_table", lambda table, days: [])
+
+    args = export_web.parse_args(["--out", str(tmp_path), "--days", "30"])
+    assert export_web.run(args) == 1
+
+    # --allow-empty reste possible (site de demonstration, cluster eteint).
+    args_ok = export_web.parse_args(["--out", str(tmp_path), "--allow-empty"])
+    assert export_web.run(args_ok) == 0
+
+    # Dans les deux cas les fichiers existent et sont du JSON valide.
+    import json as _json
+    for name in ("daily.json", "meta.json", "map.json"):
+        _json.loads((tmp_path / name).read_text(encoding="utf-8"))
+
+
+def test_no_makefile_recipe_requires_a_host_toolchain():
+    """
+    Regle du projet : Docker et make suffisent. Aucune recette ne doit invoquer
+    un outil que la machine n'a pas forcement (npm, node, python, java...).
+    L'exception assumee est `test-local`, explicitement documentee comme
+    variante pour qui possede deja Python.
+    """
+    makefile = (Path(__file__).resolve().parent.parent / "Makefile").read_text(encoding="utf-8")
+    forbidden = ("npm ", "npx ", "node ", "java ", "mvn ", "spark-submit ")
+
+    current = None
+    offenders = []
+    for line in makefile.split("\n"):
+        if line and not line.startswith(("\t", " ", "#")) and ":" in line:
+            current = line.split(":")[0].strip()
+        elif line.startswith("\t"):
+            body = line.lstrip("\t").lstrip("@-")
+            # Un outil precede de 'docker' tourne dans un conteneur : c'est permis.
+            if body.startswith(("docker", "$(DC", "$(CTL", "$(PY)")):
+                continue
+            for tool in forbidden:
+                if body.startswith(tool):
+                    offenders.append((current, body[:60]))
+    assert not offenders, f"recettes dependant d'un outil hote : {offenders}"

@@ -211,9 +211,16 @@ def run(args: argparse.Namespace) -> int:
 
     total = sum(exported.values())
     logger.info("Export termine : %d ligne(s) au total vers %s", total, out_dir)
-    if total == 0:
-        logger.warning("AUCUNE donnee exportee — le cluster a-t-il tourne "
-                       "(make all) avant l'export ?")
+
+    if total == 0 and not args.allow_empty:
+        # Un site vide qui se deploie sans broncher est un faux vert : on
+        # echoue bruyamment plutot que de publier une vitrine sans donnees.
+        logger.error("AUCUNE ligne exportee : les tables Gold sont vides.")
+        logger.error("Lancez d'abord `make all` (le pipeline doit avoir reussi), "
+                     "puis relancez `make export-web`.")
+        logger.error("Pour generer quand meme un site vide : "
+                     "python export_web.py --allow-empty")
+        return 1
     return 0
 
 
@@ -224,6 +231,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                         help="Profondeur d'historique exportee (jours).")
     parser.add_argument("--out", default="web/public/data",
                         help="Repertoire de sortie des JSON.")
+    parser.add_argument("--allow-empty", action="store_true",
+                        help="Ne pas echouer si les tables Gold sont vides.")
     return parser.parse_args(argv)
 
 
