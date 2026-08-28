@@ -223,7 +223,7 @@ export default function Page() {
           ))}
         </div>
         <div className="card">
-          {tempSeries.length ? <SeriesChart data={tempSeries} cities={cities} unit={unit} height={380} /> : <Empty what="températures" />}
+          {tempSeries.length ? <SeriesChart data={tempSeries} cities={cities} unit={unit} height={440} /> : <Empty what="températures" />}
         </div>
         <p className="takeaway">{tempInsight(filtered)}</p>
       </section>
@@ -232,7 +232,7 @@ export default function Page() {
         <h2><span className="num">03</span> Précipitations</h2>
         <blockquote>Quels jours ont été les plus arrosés ?</blockquote>
         <div className="card">
-          {rainSeries.length ? <GroupedBars data={rainSeries} cities={cities} height={300} /> : <Empty what="précipitations" />}
+          {rainSeries.length ? <GroupedBars data={rainSeries} cities={cities} height={340} /> : <Empty what="précipitations" />}
         </div>
         <p className="takeaway">{rainInsight(filtered)}</p>
       </section>
@@ -241,7 +241,7 @@ export default function Page() {
         <h2><span className="num">04</span> Profil climatique mensuel</h2>
         <blockquote>Quelle est la normale de température de chaque ville, mois par mois ?</blockquote>
         <div className="card">
-          {heatData.length ? <ClimateHeatmap data={heatData} months={MONTHS} cities={cities} height={340} /> : <Empty what="profil climatique" />}
+          {heatData.length ? <ClimateHeatmap data={heatData} months={MONTHS} cities={cities} height={380} /> : <Empty what="profil climatique" />}
         </div>
         <p className="takeaway">{climateInsight(climate)}</p>
       </section>
@@ -250,7 +250,7 @@ export default function Page() {
         <h2><span className="num">05</span> Prédictions ML (J+1)</h2>
         <blockquote>Le modèle XGBoost prédit-il bien la température du lendemain ?</blockquote>
         <div className="card">
-          {predData.length ? <PredictionScatter data={predData} height={340} /> : <Empty what="prédictions" />}
+          {predData.length ? <PredictionScatter data={predData} height={380} /> : <Empty what="prédictions" />}
         </div>
         <p className="takeaway">{mlInsight(predictions)}</p>
       </section>
@@ -259,7 +259,7 @@ export default function Page() {
         <h2><span className="num">06</span> Tendances hebdomadaires</h2>
         <blockquote>Quelle ville se réchauffe ou se refroidit le plus d’une semaine à l’autre ?</blockquote>
         <div className="card">
-          {deltaData.length ? <WeeklyDelta data={deltaData} height={320} /> : <Empty what="tendances hebdomadaires" />}
+          {deltaData.length ? <WeeklyDelta data={deltaData} height={360} /> : <Empty what="tendances hebdomadaires" />}
         </div>
         <p className="takeaway">{weeklyInsight(weekly)}</p>
       </section>
@@ -269,7 +269,7 @@ export default function Page() {
         <blockquote>Quels seuils ont été franchis, et à quelle sévérité ?</blockquote>
         <div className="extgrid">
           {donutData.length ? (
-            <div className="card"><Donut data={donutData} height={300} /></div>
+            <div className="card"><Donut data={donutData} height={320} /></div>
           ) : null}
           <div className="card">
             {extremes.length ? (

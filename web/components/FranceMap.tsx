@@ -55,7 +55,7 @@ export default function FranceMap({ points, selected, onSelect }: {
     }],
   };
   return (
-    <EChart option={option} height={460}
+    <EChart option={option} height={500}
       onClick={(p: any) => onSelect(p.name === selected ? null : p.name)} />
   );
 }
