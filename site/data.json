@@ -1,0 +1,30 @@
+{
+  "generated_at": null,
+  "source": "placeholder",
+  "cities": [
+    { "city": "Paris", "temp_avg": 22.4, "temp_min": 16.2, "temp_max": 27.8, "precip_sum": 0.0, "wind_avg": 3.4 },
+    { "city": "Lyon", "temp_avg": 24.1, "temp_min": 17.0, "temp_max": 29.5, "precip_sum": 0.0, "wind_avg": 2.8 },
+    { "city": "Marseille", "temp_avg": 26.3, "temp_min": 20.1, "temp_max": 31.0, "precip_sum": 0.0, "wind_avg": 5.1 },
+    { "city": "Bordeaux", "temp_avg": 23.0, "temp_min": 16.8, "temp_max": 28.2, "precip_sum": 1.2, "wind_avg": 3.9 },
+    { "city": "Lille", "temp_avg": 19.8, "temp_min": 13.9, "temp_max": 24.6, "precip_sum": 0.4, "wind_avg": 4.2 }
+  ],
+  "extreme_events": [
+    { "dt": "2025-07-15", "city": "Marseille", "event_type": "canicule", "severity": "alerte", "value": 36.1, "detail": "Marseille : 36.1°C le 2025-07-15" }
+  ],
+  "ml": {
+    "available": false,
+    "model_version": null,
+    "rmse": null,
+    "mae": null,
+    "r2": null,
+    "beats_baseline": null,
+    "trained_at": null
+  },
+  "ai": {
+    "available": false,
+    "bulletin": "En attente du premier run du pipeline : le bulletin météo sera généré automatiquement.",
+    "model": null,
+    "generated_at": null
+  },
+  "climate": []
+}

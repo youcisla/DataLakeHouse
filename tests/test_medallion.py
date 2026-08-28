@@ -741,23 +741,23 @@ def test_make_all_resumes_where_it_stopped(cp):
     """
     `make all` doit pouvoir etre relance en boucle sans tout refaire.
 
-    Coupure apres 'pipeline' : au passage suivant, init/unpause/pipeline sont
-    sautes et l'on reprend a 'ml'.
+    Coupure pendant 'pipeline' : au passage suivant, init/unpause sont
+    sautes et l'on reprend a 'pipeline' (Bronze -> Silver -> Gold -> ML).
     """
-    etapes = ["init", "unpause", "pipeline", "ml", "predict"]
+    etapes = ["init", "unpause", "pipeline"]
     cp.reset(cp.STAGE_WORKFLOW)
 
     executees = []
     for etape in cp.pending_keys(cp.STAGE_WORKFLOW, etapes):
-        if etape == "ml":
-            break  # coupure : le cluster tombe pendant l'entrainement
+        if etape == "pipeline":
+            break  # coupure : le cluster tombe pendant la chaine Medallion + ML
         executees.append(etape)
         cp.mark_done(cp.STAGE_WORKFLOW, etape)
-    assert executees == ["init", "unpause", "pipeline"]
+    assert executees == ["init", "unpause"]
 
     # Deuxieme `make all` : on reprend exactement la ou l'on s'etait arrete.
     reprise = cp.pending_keys(cp.STAGE_WORKFLOW, etapes)
-    assert reprise == ["ml", "predict"]
+    assert reprise == ["pipeline"]
     for etape in reprise:
         cp.mark_done(cp.STAGE_WORKFLOW, etape)
 
@@ -775,7 +775,7 @@ def test_force_replays_a_completed_step(cp, monkeypatch):
     assert pipeline_ctl.skip_if_done("pipeline", force=False) is True
     assert pipeline_ctl.skip_if_done("pipeline", force=True) is False
     # Une etape jamais faite n'est jamais sautee.
-    assert pipeline_ctl.skip_if_done("ml", force=False) is False
+    assert pipeline_ctl.skip_if_done("unpause", force=False) is False
 
 
 def test_step_guard_is_inert_outside_a_container(monkeypatch):

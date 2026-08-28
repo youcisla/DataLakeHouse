@@ -163,7 +163,6 @@ services:
       - "4040:4040"   # UI du driver Spark (à la demande)
     volumes:
       - ..:/opt/project
-      - noaa_cache:/opt/data/noaa
       - meteofrance_cache:/opt/data/meteofrance
     networks: [meteo-net]
 
@@ -183,7 +182,6 @@ services:
     depends_on: [spark-master]
     volumes:
       - ..:/opt/project
-      - noaa_cache:/opt/data/noaa
       - meteofrance_cache:/opt/data/meteofrance
     networks: [meteo-net]
 
@@ -272,7 +270,6 @@ services:
     volumes:
       - ..:/opt/project
       - meteofrance_cache:/opt/data/meteofrance
-      - noaa_cache:/opt/data/noaa
     networks: [meteo-net]
 
   # --------------------------------------------------------------------------
@@ -318,7 +315,6 @@ services:
       - "8888:8888"
     volumes:
       - ..:/home/jovyan/work/projet-meteo
-      - noaa_cache:/opt/data/noaa
       - meteofrance_cache:/opt/data/meteofrance
     networks: [meteo-net]
 
@@ -364,7 +360,6 @@ volumes:
   zookeeper_data:
   kafka_data:
   postgres_data:
-  noaa_cache:
   meteofrance_cache:
   ollama_data:
 

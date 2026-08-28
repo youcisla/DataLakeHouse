@@ -24,7 +24,6 @@ import tempfile
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
 
@@ -114,12 +113,8 @@ def build_features(
     data["timestamp"] = pd.to_datetime(data["timestamp"])
     data["source"] = data["source"].astype(str).str.upper()
 
-    # Clé de localisation : station_id pour NOAA, ville pour Open-Meteo.
-    data["location"] = np.where(
-        data["source"] == "NOAA",
-        data["station_id"].astype(str),
-        data["city"].astype(str),
-    )
+    # Clé de localisation : la ville (alignée entre Météo-France et Open-Meteo).
+    data["location"] = data["city"].astype(str)
 
     data = data.sort_values(["location", "timestamp"]).reset_index(drop=True)
 
@@ -184,15 +179,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     df = spark.read.parquet("/silver/meteo")
 
     # Localisation calculée côté Spark pour sélectionner les plus riches.
-    df = df.withColumn(
-        "location",
-        F.when(F.col("source") == "NOAA", F.col("station_id").cast("string"))
-         .otherwise(F.col("city").cast("string")),
-    )
+    df = df.withColumn("location", F.col("city").cast("string"))
 
     # Fenêtre temporelle : dt >= max(dt) - days.
-    max_dt = df.select(F.max("dt").alias("max_dt")).collect()[0]["max_dt"]
-    cutoff = (datetime.strptime(max_dt, "%Y-%m-%d") - timedelta(days=args.days)).strftime("%Y-%m-%d")
+    row = df.select(F.max("dt").alias("max_dt")).first()
+    max_dt = row["max_dt"] if row else None
+    if max_dt is None:
+        print("Silver vide : feature engineering sautée (aucune donnée).")
+        spark.stop()
+        return 0
+    if isinstance(max_dt, str):
+        max_dt = datetime.strptime(max_dt, "%Y-%m-%d").date()
+    elif isinstance(max_dt, datetime):
+        max_dt = max_dt.date()
+    cutoff = (max_dt - timedelta(days=args.days)).strftime("%Y-%m-%d")
     logger.info("Fenêtre temporelle : dt >= %s (max(dt) = %s)", cutoff, max_dt)
     df = df.filter(F.col("dt") >= cutoff)
 

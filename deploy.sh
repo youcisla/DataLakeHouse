@@ -52,7 +52,6 @@ hdfs_init() {
   info "Création des répertoires HDFS (Bronze / Silver / Gold / modèles / checkpoints)..."
   for dir in /bronze /silver /gold /models /checkpoints \
              /bronze/meteo/batch/source=meteofrance \
-             /bronze/meteo/batch/source=noaa \
              /bronze/meteo/stream/source=openmeteo; do
     curl -sf -X PUT "${NAMENODE_URL}/webhdfs/v1${dir}?op=MKDIRS&user.name=root" >/dev/null \
       && info "  OK  ${dir}" || warn "  Échec mkdir ${dir}"

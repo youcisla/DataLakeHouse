@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DataLake Météo</title>
+<style>
+  :root { --bleu:#0e7ac4; --fond:#f7f9fc; --encre:#0f2137; --carte:#ffffff; --gris:#5b6b7c; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--fond); color:var(--encre); }
+  .bande { background:linear-gradient(120deg,#0e7ac4,#35a7ff); color:#fff; padding:40px 24px 28px; }
+  .bande h1 { margin:0 0 6px; font-size:30px; }
+  .bande p { margin:0; opacity:.9; }
+  .contenu { max-width:1080px; margin:0 auto; padding:28px 20px 60px; }
+  .grille { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:16px; margin:20px 0; }
+  .carte { background:var(--carte); border-radius:14px; padding:18px; box-shadow:0 1px 3px rgba(15,33,55,.08); }
+  .carte .ville { font-weight:700; font-size:18px; }
+  .carte .temp { font-size:34px; font-weight:800; margin:8px 0 2px; }
+  .carte .minmax { color:var(--gris); font-size:13px; }
+  h2 { font-size:20px; margin:34px 0 12px; border-bottom:2px solid #e3ecf4; padding-bottom:8px; }
+  table { width:100%; border-collapse:collapse; background:var(--carte); border-radius:10px; overflow:hidden; box-shadow:0 1px 3px rgba(15,33,55,.08); }
+  th, td { text-align:left; padding:10px 12px; border-bottom:1px solid #edf2f7; font-size:14px; }
+  th { background:#eef4fa; color:var(--encre); }
+  .badge { display:inline-block; padding:2px 10px; border-radius:12px; font-size:12px; font-weight:600; }
+  .badge.alerte { background:#fff3e0; color:#e65100; }
+  .badge.extreme { background:#fdecea; color:#b71c1c; }
+  .bulletin { background:var(--carte); border-left:4px solid var(--bleu); border-radius:10px; padding:18px 20px; white-space:pre-wrap; line-height:1.6; box-shadow:0 1px 3px rgba(15,33,55,.08); }
+  .pied { color:var(--gris); font-size:13px; margin-top:36px; }
+  .note { color:var(--gris); font-size:13px; }
+  .metric { font-size:26px; font-weight:800; }
+</style>
+</head>
+<body>
+  <div class="bande">
+    <h1>DataLake Météo</h1>
+    <p>Bronze → Silver → Gold sur HDFS, orchestré par Airflow. Deux sources : archives Météo-France et temps réel Open-Meteo.</p>
+  </div>
+
+  <div class="contenu">
+    <section id="kpis">
+      <h2>Températures du jour</h2>
+      <div class="grille" id="villes"></div>
+    </section>
+
+    <section id="extremes">
+      <h2>Événements extrêmes récents</h2>
+      <div id="events"></div>
+    </section>
+
+    <section id="ml">
+      <h2>Modèle de prévision (XGBoost)</h2>
+      <div class="grille" id="mlkpis"></div>
+    </section>
+
+    <section id="bulletin">
+      <h2>Bulletin météo</h2>
+      <div class="bulletin" id="bulletinTexte"></div>
+      <p class="note" id="bulletinMeta"></p>
+    </section>
+
+    <section id="climate">
+      <h2>Profil climatique mensuel</h2>
+      <div id="climate"></div>
+    </section>
+
+    <p class="pied" id="pied"></p>
+  </div>
+
+<script>
+async function charger() {
+  let data;
+  try {
+    const rep = await fetch("data.json", { cache: "no-store" });
+    data = await rep.json();
+  } catch (e) {
+    document.getElementById("pied").textContent = "Données indisponibles.";
+    return;
+  }
+
+  const villes = document.getElementById("villes");
+  for (const v of (data.cities || [])) {
+    const carte = document.createElement("div");
+    carte.className = "carte";
+    const t = v.temp_avg != null ? v.temp_avg.toFixed(1) + " °C" : "n.d.";
+    const min = v.temp_min != null ? v.temp_min.toFixed(1) + " °C" : "";
+    const max = v.temp_max != null ? v.temp_max.toFixed(1) + " °C" : "";
+    carte.innerHTML = '<div class="ville">' + v.city + '</div>' +
+      '<div class="temp">' + t + '</div>' +
+      '<div class="minmax">min ' + min + ' · max ' + max + '</div>';
+    villes.appendChild(carte);
+  }
+  if (!data.cities || !data.cities.length) {
+    villes.innerHTML = '<p class="note">En attente des données Gold.</p>';
+  }
+
+  const ev = document.getElementById("events");
+  const evts = data.extreme_events || [];
+  if (evts.length) {
+    let html = "<table><thead><tr><th>Date</th><th>Ville</th><th>Type</th><th>Gravité</th><th>Valeur</th></tr></thead><tbody>";
+    for (const e of evts) {
+      const sev = e.severity === "extreme" ? "extreme" : "alerte";
+      html += "<tr><td>" + e.dt + "</td><td>" + e.city + "</td><td>" + e.event_type +
+        "</td><td><span class='badge " + sev + "'>" + sev + "</span></td><td>" +
+        (e.value != null ? e.value : "") + "</td></tr>";
+    }
+    html += "</tbody></table>";
+    ev.innerHTML = html;
+  } else {
+    ev.innerHTML = "<p class='note'>Aucun événement extrême sur la période.</p>";
+  }
+
+  const ml = data.ml || {};
+  const mlkpis = document.getElementById("mlkpis");
+  if (ml.available) {
+    mlkpis.innerHTML =
+      metric("RMSE", (ml.rmse != null ? ml.rmse.toFixed(2) + " °C" : "n.d.")) +
+      metric("MAE", (ml.mae != null ? ml.mae.toFixed(2) + " °C" : "n.d.")) +
+      metric("R²", (ml.r2 != null ? ml.r2.toFixed(3) : "n.d.")) +
+      metric("Version", "v" + ml.model_version);
+  } else {
+    mlkpis.innerHTML = "<p class='note'>Modèle en attente du premier entraînement.</p>";
+  }
+
+  const ai = data.ai || {};
+  document.getElementById("bulletinTexte").textContent = ai.bulletin || "Aucun bulletin.";
+  document.getElementById("bulletinMeta").textContent =
+    (ai.generated_at ? "Généré le " + ai.generated_at : "") +
+    (ai.model ? " · modèle " + ai.model : "");
+
+  const climate = document.getElementById("climate");
+  const clim = data.climate || [];
+  if (clim.length) {
+    let html = "<table><thead><tr><th>Ville</th><th>Mois</th><th>Saison</th><th>Normale (°C)</th><th>Pluie (mm)</th><th>Jours de pluie</th></tr></thead><tbody>";
+    for (const c of clim) {
+      html += "<tr><td>" + c.city + "</td><td>" + c.month + "</td><td>" + c.season +
+        "</td><td>" + (c.temp_normal != null ? c.temp_normal.toFixed(1) : "") + "</td><td>" +
+        (c.precip_avg != null ? c.precip_avg.toFixed(1) : "") + "</td><td>" +
+        (c.rain_days != null ? c.rain_days : "") + "</td></tr>";
+    }
+    html += "</tbody></table>";
+    climate.innerHTML = html;
+  } else {
+    climate.innerHTML = "<p class='note'>Profil climatique en attente des données.</p>";
+  }
+
+  const pied = document.getElementById("pied");
+  if (data.source === "hdfs") {
+    pied.textContent = "Exporté depuis le datalake (HDFS) le " + data.generated_at + ".";
+  } else {
+    pied.textContent = "Instantané d'exemple. Lancez « make showcase » après « make all » pour exporter les vraies sorties Gold.";
+  }
+}
+
+function metric(label, valeur) {
+  return "<div class='carte'><div class='note'>" + label + "</div><div class='metric'>" + valeur + "</div></div>";
+}
+
+charger();
+</script>
+</body>
+</html>
