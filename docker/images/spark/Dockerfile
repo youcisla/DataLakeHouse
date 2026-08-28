@@ -24,7 +24,7 @@ RUN curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py && python3.
 RUN python3.11 -m pip install --no-cache-dir pandas==2.0.3 numpy==1.24.4 scikit-learn==1.3.2 xgboost==2.0.3 pyarrow==15.0.2 requests==2.31.0 joblib==1.3.2
 
 # Mêmes dépendances pour le Python 3.8 du systeme (scripts utilitaires sur spark-master)
-RUN pip install --no-cache-dir pandas==2.0.3 numpy==1.24.4 scikit-learn==1.3.2 xgboost==2.0.3 pyarrow==15.0.2 requests==2.31.0 joblib==1.3.2
+RUN python3 -m pip install --no-cache-dir pandas==2.0.3 numpy==1.24.4 scikit-learn==1.3.2 xgboost==2.0.3 pyarrow==15.0.2 requests==2.31.0 joblib==1.3.2
 
 # Les scripts du projet (hdfs_utils, etc.) doivent être importables par les drivers
 ENV PYTHONPATH=/opt/project/scripts
