@@ -8,7 +8,7 @@ Lit le Silver (/silver/meteo) et produit quatre agrégats Gold :
     3. extreme_events    : événements extrêmes via classify_extreme ;
     4. climate_profile   : « profil météo » mensuel par ville (normales
        climatiques, amplitude thermique, jours de pluie, saison) construit
-       depuis les archives Météo-France — l'équivalent météo d'un profil
+       depuis les archives Météo-France, l'équivalent météo d'un profil
        client, et le socle des features du modèle ML.
 
 Conception :
@@ -502,6 +502,12 @@ def run(args: argparse.Namespace) -> None:
         end = F.lit(args.end_date).cast("date")
         silver = silver.filter((F.col("dt") >= start) & (F.col("dt") <= end))
 
+        # Fenêtre complète : les agrégats multi-jours (hebdo, mensuel) doivent
+        # couvrir TOUT l'historique, pas seulement les nouvelles partitions.
+        # Sans cela, --only-new recalculerait une semaine/mois sur un
+        # sous-ensemble de jours et écraserait un agrégat déjà complet.
+        full_silver = silver
+
         if args.only_new:
             # Ne recalculer que les dt dont daily_aggregates n'est pas deja
             # marque : sans cela, Gold recalculait TOUT a chaque execution.
@@ -524,22 +530,28 @@ def run(args: argparse.Namespace) -> None:
             silver = silver.filter(F.col("dt").cast("string").isin(todo))
 
         daily = compute_daily_aggregates(silver)
-        # daily est réutilisé pour les trois agrégats : on le met en cache.
         daily.cache()
+        # Source des agrégats hebdo / extrêmes / mensuel : l'historique complet.
+        full_daily = daily if not args.only_new else compute_daily_aggregates(full_silver)
+        if full_daily is not daily:
+            full_daily.cache()
+
         import checkpoint
 
         run = checkpoint.run_id("gold")
         try:
             write_daily_aggregates(daily)
-            write_weekly_trends(compute_weekly_trends(daily))
-            write_extreme_events(compute_extreme_events(daily, get_thresholds()))
-            write_climate_profile(compute_climate_profile(daily))
+            write_weekly_trends(compute_weekly_trends(full_daily))
+            write_extreme_events(compute_extreme_events(full_daily, get_thresholds()))
+            write_climate_profile(compute_climate_profile(full_daily))
             checkpoint.record_run(checkpoint.STAGE_GOLD, run, "success", tables=4)
         except Exception:
             checkpoint.record_run(checkpoint.STAGE_GOLD, run, "failed")
             raise
         finally:
             daily.unpersist()
+            if full_daily is not daily:
+                full_daily.unpersist()
     finally:
         spark.stop()
 

@@ -18,7 +18,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-COMPOSE="docker compose --env-file ${SCRIPT_DIR}/docker/.env -f ${SCRIPT_DIR}/docker/docker-compose.yml"
+COMPOSE=(docker compose --env-file "${SCRIPT_DIR}/docker/.env" -f "${SCRIPT_DIR}/docker/docker-compose.yml")
 # Vu depuis l'hôte, le Namenode est publié sur localhost:9870 (le nom de service
 # "namenode" n'est résoluble que dans le réseau Docker).
 NAMENODE_URL="${NAMENODE_URL:-http://localhost:9870}"
@@ -140,7 +140,7 @@ case "${1:-up}" in
       read -r -p "Confirmer ? [y/N] " answer
     fi
     if [ "${answer}" = "y" ] || [ "${answer}" = "Y" ] || [ "${answer}" = "1" ]; then
-      ${COMPOSE} down -v --remove-orphans
+      "${COMPOSE[@]}" down -v --remove-orphans
       info "Cluster réinitialisé. Relancez : ./deploy.sh up  (ou : make all)"
     else
       info "Annulé."

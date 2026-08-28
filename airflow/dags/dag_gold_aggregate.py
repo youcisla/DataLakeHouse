@@ -7,7 +7,7 @@ Job Spark qui calcule depuis Silver :
   - weekly_trends     : tendances hebdomadaires + écart à la semaine précédente
   - extreme_events    : détection d'événements extrêmes (canicule, fortes pluies...)
   - climate_profile   : profil météo mensuel par ville (normales, amplitude,
-                        jours de pluie, saison) — l'équivalent d'un profil client
+                        jours de pluie, saison), l'équivalent d'un profil client
 Puis enchaîne :
   - ml/inference.py   : prédictions température J+1 (modèle XGBoost) -> ml_predictions
   - ml/genai_summary.py : bulletin météo généré par LLM (Ollama, fallback si absent)

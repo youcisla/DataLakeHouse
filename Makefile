@@ -83,7 +83,8 @@ help:  ## Affiche l aide - instantane, aucun conteneur demarre
 	@echo   Pipeline
 	@echo   make pipeline - Declenche Bronze et attend toute la chaine
 	@echo   make bronze - Rejoue une couche isolement, idempotent
-	@echo   make silver - @echo     make gold
+	@echo   make silver - Rejoue Silver isolement, idempotent
+	@echo   make gold - Rejoue Gold isolement, idempotent
 	@echo   make ml - Entraine le modele XGBoost depuis le Silver
 	@echo   make predict - Rejoue Gold : predictions J+1 et bulletin IA
 	@echo   make genai - Bonus : Ollama et bulletins IA

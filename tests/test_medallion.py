@@ -671,7 +671,7 @@ def test_interrupted_ingestion_resumes_where_it_stopped(cp):
     Le scenario qui motive tout ce module.
 
     10 lots a ingerer, coupure apres le 7e : la reprise ne doit traiter que
-    les 3 restants — et surtout jamais re-ingerer les 7 premiers.
+    les 3 restants, et surtout jamais re-ingerer les 7 premiers.
     """
     cp.reset(cp.STAGE_BRONZE)
     lots = [mf.batch_key(dep, period)
@@ -782,7 +782,7 @@ def test_step_guard_is_inert_outside_a_container(monkeypatch):
     """
     Hors conteneur, HDFS est injoignable : la garde ne doit rien casser.
 
-    Elle repond 'pas fait' — l'etape est rejouee, ce qui est sans danger
+    Elle repond 'pas fait' : l'etape est rejouee, ce qui est sans danger
     puisque chaque etape est idempotente.
     """
     monkeypatch.setattr(pipeline_ctl, "IN_CONTAINER", False)
