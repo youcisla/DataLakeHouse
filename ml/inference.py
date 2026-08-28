@@ -41,7 +41,8 @@ from ml.feature_engineering import build_features  # noqa: E402
 logger = logging.getLogger(__name__)
 
 MODEL_PREFIX = "temperature_predictor_v"
-GOLD_PREDICTIONS = "/gold/meteo/ml_predictions"
+GOLD_PREDICTIONS = "/gold/meteo/ml_predictions"  # WebHDFS (chemin nu)
+GOLD_PREDICTIONS_HDFS = "hdfs://namenode:9000/gold/meteo/ml_predictions"  # Spark natif
 
 
 def _build_spark_session():
@@ -143,7 +144,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     spark = _build_spark_session()
 
     try:
-        df = spark.read.parquet("/silver/meteo")
+        df = spark.read.parquet("hdfs://namenode:9000/silver/meteo")
     except Exception as exc:
         print(f"Silver illisible ({exc}) : inference sautée (aucune donnée à prédire).")
         spark.stop()
@@ -216,7 +217,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         .mode("overwrite") \
         .partitionBy("dt") \
         .option("partitionOverwriteMode", "dynamic") \
-        .parquet(GOLD_PREDICTIONS)
+        .parquet(GOLD_PREDICTIONS_HDFS)
 
     # Marqueurs d'idempotence : par partition dt + racine.
     for d in sorted(result["dt"].unique()):

@@ -176,7 +176,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     spark = _build_spark_session()
 
-    df = spark.read.parquet("/silver/meteo")
+    df = spark.read.parquet("hdfs://namenode:9000/silver/meteo")
 
     # Localisation calculée côté Spark pour sélectionner les plus riches.
     df = df.withColumn("location", F.col("city").cast("string"))
