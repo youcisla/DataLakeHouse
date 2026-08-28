@@ -44,7 +44,6 @@ with DAG(
         task_id="feature_engineering",
         application="/opt/project/ml/feature_engineering.py",
         conn_id="spark_default",
-        deploy_mode="cluster",
         application_args=["--days", "730", "--max-locations", "200"],
         verbose=False,
         doc_md="Construit le jeu de features depuis Silver "
@@ -55,7 +54,6 @@ with DAG(
         task_id="entrainement_xgboost",
         application="/opt/project/ml/train_model.py",
         conn_id="spark_default",
-        deploy_mode="cluster",
         verbose=False,
         doc_md="Entraîne XGBoost (GridSearchCV, split 70/15/15) et sauvegarde "
                "/models/temperature_predictor_v{N}/.",

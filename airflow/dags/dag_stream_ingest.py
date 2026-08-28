@@ -51,7 +51,6 @@ with DAG(
         task_id="streaming_kafka_vers_bronze",
         application="/opt/project/scripts/streaming_ingest.py",
         conn_id="spark_default",
-        deploy_mode="cluster",
         packages="org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1",
         application_args=[
             "--max-runtime", "{{ var.value.get('streaming_runtime_seconds', '300') }}",

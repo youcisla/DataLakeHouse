@@ -275,6 +275,8 @@ services:
       AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT: "False"
       AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077
       PYTHONPATH: /opt/project/scripts
+      # Worker Python = 3.11, aligne sur le driver Airflow 3.11 (sinon PYTHON_VERSION_MISMATCH)
+      PYSPARK_PYTHON: python3.11
       HDFS_NAMENODE: ${HDFS_NAMENODE:-namenode}
       HDFS_WEBHDFS_PORT: ${HDFS_WEBHDFS_PORT:-9870}
       BRONZE_QUOTA_GB: ${BRONZE_QUOTA_GB:-10.5}

@@ -71,7 +71,6 @@ with DAG(
         task_id="agregation_silver_vers_gold",
         application="/opt/project/scripts/gold_transform.py",
         conn_id="spark_default",
-        deploy_mode="cluster",
         application_args=[
             "--start-date", os.environ.get("SILVER_START_DATE", "2000-01-01"),
             "--end-date", os.environ.get("SILVER_END_DATE", "2026-12-31"),
@@ -93,7 +92,6 @@ with DAG(
         task_id="entrainement_features",
         application="/opt/project/ml/feature_engineering.py",
         conn_id="spark_default",
-        deploy_mode="cluster",
         application_args=["--days", "730", "--max-locations", "200"],
         verbose=False,
         doc_md="Construit les features depuis Silver (premier entraînement).",
@@ -103,7 +101,6 @@ with DAG(
         task_id="entrainement_modele",
         application="/opt/project/ml/train_model.py",
         conn_id="spark_default",
-        deploy_mode="cluster",
         verbose=False,
         doc_md="Entraîne XGBoost et versionne le modèle sous /models.",
     )
@@ -112,7 +109,6 @@ with DAG(
         task_id="inference_ml",
         application="/opt/project/ml/inference.py",
         conn_id="spark_default",
-        deploy_mode="cluster",
         application_args=["--days", "30"],
         verbose=False,
         trigger_rule="none_failed",
@@ -123,7 +119,6 @@ with DAG(
         task_id="bulletin_genai",
         application="/opt/project/ml/genai_summary.py",
         conn_id="spark_default",
-        deploy_mode="cluster",
         verbose=False,
         doc_md="Génère le bulletin météo (Ollama, fallback si absent) -> ai_insights.",
     )

@@ -51,7 +51,6 @@ with DAG(
         task_id="transformation_bronze_vers_silver",
         application="/opt/project/scripts/silver_transform.py",
         conn_id="spark_default",
-        deploy_mode="cluster",
         application_args=[
             "--start-date", os.environ.get("SILVER_START_DATE", "2000-01-01"),
             "--end-date", os.environ.get("SILVER_END_DATE", "2026-12-31"),
