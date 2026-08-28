@@ -227,6 +227,93 @@ def dedup_keys() -> List[str]:
 # Helpers d'infrastructure (imports pyspark locaux)
 # ---------------------------------------------------------------------------
 
+def success_glob(table_path: str, prefix: str = "dt=") -> str:
+    """
+    Motif glob des marqueurs _SUCCESS d'une table partitionnee.
+
+    Un seul appel ``globStatus`` avec ce motif remplace un appel WebHDFS PAR
+    partition : sur quatre ans de donnees, c'est 1 aller-retour au lieu de
+    ~1460.
+    """
+    return f"{table_path.rstrip('/')}/{prefix}*/_SUCCESS"
+
+
+def partition_value_from_path(path: str, prefix: str = "dt=") -> Optional[str]:
+    """
+    Extrait la valeur de partition d'un chemin de marqueur.
+
+    'hdfs://namenode:9000/silver/meteo/dt=2025-01-15/_SUCCESS' -> '2025-01-15'
+    Retourne None si le chemin ne porte pas ce prefixe de partition.
+    """
+    if not path:
+        return None
+    for segment in str(path).split("/"):
+        if segment.startswith(prefix):
+            value = segment[len(prefix):].strip()
+            return value or None
+    return None
+
+
+def _hadoop_fs(spark: "SparkSession"):
+    """
+    FileSystem Hadoop NATIF (via la JVM de Spark).
+
+    Les jobs Spark n'ont aucune raison de passer par WebHDFS/REST : le driver
+    parle deja HDFS nativement. On evite ainsi des milliers d'aller-retours
+    HTTP (et la dependance a ``requests`` cote executeur).
+    """
+    jvm = spark._jvm
+    hadoop_conf = spark._jsc.hadoopConfiguration()
+    uri = jvm.java.net.URI(hdfs_base())
+    return jvm.org.apache.hadoop.fs.FileSystem.get(uri, hadoop_conf), jvm
+
+
+def existing_partitions(spark: "SparkSession", table_path: str,
+                        prefix: str = "dt=") -> set:
+    """Partitions deja marquees _SUCCESS, en UN seul appel natif."""
+    try:
+        fs, jvm = _hadoop_fs(spark)
+        statuses = fs.globStatus(jvm.org.apache.hadoop.fs.Path(
+            success_glob(table_path, prefix)))
+        if statuses is None:
+            return set()
+        found = set()
+        for status in statuses:
+            value = partition_value_from_path(status.getPath().toString(), prefix)
+            if value:
+                found.add(value)
+        return found
+    except Exception as exc:  # noqa: BLE001 - table absente au premier run
+        logger.info("Aucune partition existante sous %s (%s).", table_path, exc)
+        return set()
+
+
+def write_marker_paths(spark: "SparkSession", directories: List[str],
+                       marker: str = "_SUCCESS") -> int:
+    """
+    Depose un marqueur dans chacun des repertoires donnes, nativement.
+
+    Aucun appel HTTP : c'est le FileSystem Hadoop de la JVM Spark qui ecrit.
+    """
+    fs, jvm = _hadoop_fs(spark)
+    written = 0
+    for directory in directories:
+        path = jvm.org.apache.hadoop.fs.Path(f"{directory.rstrip('/')}/{marker}")
+        try:
+            fs.create(path, True).close()
+            written += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Marqueur %s non depose : %s", path, exc)
+    return written
+
+
+def write_success_markers(spark: "SparkSession", table_path: str,
+                          values: List[str], prefix: str = "dt=") -> int:
+    """Depose les marqueurs _SUCCESS d'une table partitionnee, nativement."""
+    return write_marker_paths(
+        spark, [f"{table_path.rstrip('/')}/{prefix}{value}" for value in values])
+
+
 def hdfs_base() -> str:
     """Préfixe HDFS utilisé par Spark (RPC), ex. hdfs://namenode:9000."""
     namenode = os.environ.get("HDFS_NAMENODE", "namenode")
@@ -449,58 +536,76 @@ def transform_to_silver(spark: "SparkSession", start_date: str, end_date: str) -
     return silver
 
 
-def write_silver(silver: "DataFrame", only_new: bool) -> None:
-    """Écrit le Silver en Parquet (zstd 22) + marqueurs _SUCCESS idempotents."""
-    import hdfs_utils
+def write_silver(spark: "SparkSession", silver: "DataFrame", only_new: bool) -> None:
+    """
+    Écrit le Silver en Parquet (zstd 22) + marqueurs _SUCCESS idempotents.
+
+    Trois pieges evites ici, tous couteux a grande echelle :
+
+    1. **Une seule execution.** ``collect()`` sur les dt materialise TOUT le
+       pipeline (lecture Bronze, UDF, dedup, fenetres) ; sans persistance,
+       l'ecriture le recalculait INTEGRALEMENT une seconde fois. Le DataFrame
+       est donc persiste avant d'etre inspecte.
+    2. **Acces HDFS natif.** Les marqueurs sont lus/ecrits via le FileSystem
+       Hadoop de la JVM Spark, pas via WebHDFS : un appel ``globStatus`` au
+       lieu d'un aller-retour HTTP par partition.
+    3. **Checkpoint groupe.** Une lecture + une ecriture pour l'ensemble des
+       partitions, au lieu d'un read-modify-write complet par partition.
+    """
+    import checkpoint
+    from pyspark import StorageLevel
     from pyspark.sql import functions as F
 
     output_cols = SILVER_SCHEMA + INDICATOR_COLUMNS
     silver = silver.select(*output_cols)
 
-    # Partitions dt à écrire (au format YYYY-MM-DD).
-    all_dts = [
-        row.dt.strftime("%Y-%m-%d")
-        for row in silver.select("dt").distinct().orderBy("dt").collect()
-    ]
-
-    if only_new:
-        # Double filet : le checkpoint (rapide, une seule lecture) ET le
-        # marqueur _SUCCESS (source de verite cote donnees). Une partition
-        # n'est rejouee que si les DEUX disent qu'elle manque.
-        import checkpoint
-
-        candidates = checkpoint.pending_keys(checkpoint.STAGE_SILVER, all_dts)
-        dts = [d for d in candidates if not hdfs_utils.has_success(f"/silver/meteo/dt={d}")]
-        skipped = [d for d in all_dts if d not in dts]
-        if skipped:
-            logger.info("Partitions deja ecrites (--only-new) ignorees : %d (%s...)",
-                        len(skipped), ", ".join(sorted(skipped)[:5]))
-    else:
-        dts = all_dts
-
-    if not dts:
-        logger.info("Aucune partition Silver à écrire.")
-        return
-
-    # Restreindre l'écriture aux partitions retenues (cas --only-new).
-    if len(dts) != len(all_dts):
-        silver = silver.filter(F.col("dt").cast("string").isin(dts))
-
+    # (1) Persistance : le plan ne sera evalue qu'une fois pour l'inspection
+    # des partitions ET pour l'ecriture.
+    silver = silver.persist(StorageLevel.MEMORY_AND_DISK)
     silver_path = f"{hdfs_base()}/silver/meteo"
-    logger.info("Écriture Silver vers %s (%d partition(s) dt)", silver_path, len(dts))
-    _write_parquet_dynamic(silver, silver_path, ["dt"])
 
-    # Marqueurs d'idempotence (par partition puis racine) + checkpoints.
-    import checkpoint
+    try:
+        all_dts = [
+            row.dt.strftime("%Y-%m-%d")
+            for row in silver.select("dt").distinct().orderBy("dt").collect()
+        ]
+        if not all_dts:
+            logger.info("Aucune donnee Silver a ecrire.")
+            return
 
-    run = checkpoint.run_id("silver")
-    for d in dts:
-        hdfs_utils.write_success(f"/silver/meteo/dt={d}")
-        checkpoint.mark_done(checkpoint.STAGE_SILVER, d)
-    hdfs_utils.write_success("/silver/meteo")
-    checkpoint.record_run(checkpoint.STAGE_SILVER, run, "success",
-                          partitions_written=len(dts))
-    logger.info("Silver ecrit : %d partition(s), _SUCCESS et checkpoints deposes.", len(dts))
+        if only_new:
+            # (2) Un seul appel natif pour connaitre toutes les partitions
+            # deja ecrites, croise avec les checkpoints (double filet).
+            already_written = existing_partitions(spark, silver_path)
+            pending = checkpoint.pending_keys(checkpoint.STAGE_SILVER, all_dts)
+            dts = [d for d in pending if d not in already_written]
+            skipped = len(all_dts) - len(dts)
+            if skipped:
+                logger.info("--only-new : %d partition(s) deja ecrite(s), ignoree(s).",
+                            skipped)
+        else:
+            dts = all_dts
+
+        if not dts:
+            logger.info("Aucune partition Silver a ecrire.")
+            return
+
+        if len(dts) != len(all_dts):
+            silver = silver.filter(F.col("dt").cast("string").isin(dts))
+
+        logger.info("Ecriture Silver vers %s (%d partition(s) dt)", silver_path, len(dts))
+        _write_parquet_dynamic(silver, silver_path, ["dt"])
+
+        # (2) Marqueurs natifs, (3) checkpoint en une seule ecriture.
+        written = write_success_markers(spark, silver_path, dts)
+        checkpoint.mark_many(checkpoint.STAGE_SILVER, dts)
+        checkpoint.record_run(checkpoint.STAGE_SILVER, checkpoint.run_id("silver"),
+                              "success", partitions_written=len(dts),
+                              markers_written=written)
+        logger.info("Silver ecrit : %d partition(s), %d marqueur(s), checkpoint groupe.",
+                    len(dts), written)
+    finally:
+        silver.unpersist()
 
 
 def run(args: argparse.Namespace) -> None:
@@ -510,7 +615,7 @@ def run(args: argparse.Namespace) -> None:
         silver = transform_to_silver(spark, args.start_date, args.end_date)
         if silver is None:
             return
-        write_silver(silver, only_new=args.only_new)
+        write_silver(spark, silver, only_new=args.only_new)
     finally:
         spark.stop()
 

@@ -195,7 +195,7 @@ showcase:  ## Exporte les sorties Gold vers site/data.json (vitrine en ligne)
 
 urls:  ## Rappelle les URLs des interfaces
 	@echo [make] Interfaces du datalake :
-	@echo [make]   Airflow     http://localhost:8080    admin / admin
+	@echo [make]   Airflow     http://localhost:8082    admin / admin
 	@echo [make]   Spark       http://localhost:8081
 	@echo [make]   HDFS        http://localhost:9870
 	@echo [make]   Jupyter     http://localhost:8888    token : meteo

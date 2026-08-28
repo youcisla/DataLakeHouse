@@ -25,15 +25,12 @@ Auteur : Youcef, équipe DataLake Météo
 from __future__ import annotations
 
 import argparse
-import datetime as dt
-import json
 import logging
 import os
 import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
-import hdfs_utils  # noqa: E402
 
 logger = logging.getLogger("streaming_ingest")
 
@@ -92,6 +89,10 @@ def build_spark_session(app_name: str):
     return spark, schema
 
 
+#: Racine Bronze du flux temps reel.
+BRONZE_STREAM_ROOT = "/bronze/meteo/stream/source=openmeteo"
+
+
 def hour_dir_for(hour_str: str) -> str:
     """'2026-08-27 14' -> /bronze/meteo/stream/source=openmeteo/year=2026/month=08/day=27/hour=14"""
     date_part, hour = hour_str.split(" ")
@@ -102,36 +103,60 @@ def hour_dir_for(hour_str: str) -> str:
 
 def write_batch(df, epoch_id: int, spark) -> None:
     """
-    foreachBatch : écrit les JSON bruts (format texte, une ligne = un message)
-    dans le répertoire-heure correspondant, puis dépose le marqueur _SUCCESS
-    (créé une seule fois par répertoire).
+    foreachBatch : ecrit les JSON BRUTS dans l'arborescence horaire Bronze.
+
+    Deux pieges evites ici :
+
+    1. **Une seule ecriture partitionnee** au lieu d'une boucle par heure.
+       L'ancienne version filtrait ``parsed`` pour chaque heure : le parsing
+       JSON etait donc recalcule autant de fois qu'il y avait d'heures, plus
+       une fois pour le ``distinct`` et une fois pour le ``count`` final —
+       soit N+2 evaluations du meme micro-batch, toutes les 30 secondes.
+       ``partitionBy`` produit exactement la meme arborescence en un seul job.
+    2. **Marqueurs natifs** : le FileSystem Hadoop de la JVM, pas WebHDFS.
     """
+    from pyspark import StorageLevel
     from pyspark.sql import functions as F
+
+    import silver_transform
 
     parsed = (df
               .select(F.from_json(F.col("json_value"), spark._meteo_schema).alias("d"),
                       F.col("json_value"))
-              .withColumn("hour", F.date_format(F.to_timestamp(F.col("d.timestamp")), "yyyy-MM-dd HH"))
-              .filter(F.col("hour").isNotNull()))
+              .withColumn("_ts", F.to_timestamp(F.col("d.timestamp")))
+              .filter(F.col("_ts").isNotNull())
+              .withColumn("year", F.date_format("_ts", "yyyy"))
+              .withColumn("month", F.date_format("_ts", "MM"))
+              .withColumn("day", F.date_format("_ts", "dd"))
+              .withColumn("hour", F.date_format("_ts", "HH"))
+              .select("json_value", "year", "month", "day", "hour")
+              .persist(StorageLevel.MEMORY_AND_DISK))
 
-    hours = [row["hour"] for row in parsed.select("hour").distinct().collect()]
-    if not hours:
-        logger.info("Batch %d : aucun message valide.", epoch_id)
-        return
+    try:
+        total = parsed.count()
+        if total == 0:
+            logger.info("Batch %d : aucun message valide.", epoch_id)
+            return
 
-    for hour in hours:
-        target_dir = hour_dir_for(hour)
+        stream_root = f"{hdfs_base()}{BRONZE_STREAM_ROOT}"
         (parsed
-         .filter(F.col("hour") == hour)
-         .select("json_value")
          .write
          .mode("append")
-         .text(f"{hdfs_base()}{target_dir}"))
-        hdfs_utils.write_success(target_dir)
-        logger.info("Batch %d : heure %s -> %s (marqueur OK)", epoch_id, hour, target_dir)
+         .partitionBy("year", "month", "day", "hour")
+         .text(stream_root))
 
-    logger.info("Batch %d : %d lignes écrites (%d heures).",
-                epoch_id, parsed.count(), len(hours))
+        # Les repertoires-heure effectivement alimentes (depuis le cache).
+        hours = parsed.select("year", "month", "day", "hour").distinct().collect()
+        directories = [
+            f"{stream_root}/year={row['year']}/month={row['month']}"
+            f"/day={row['day']}/hour={row['hour']}"
+            for row in hours
+        ]
+        written = silver_transform.write_marker_paths(spark, directories)
+        logger.info("Batch %d : %d ligne(s) ecrite(s), %d heure(s), %d marqueur(s).",
+                    epoch_id, total, len(directories), written)
+    finally:
+        parsed.unpersist()
 
 
 def run_streaming(args: argparse.Namespace) -> int:

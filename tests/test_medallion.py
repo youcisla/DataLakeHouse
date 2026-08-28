@@ -22,6 +22,7 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import gzip
+import re
 import sys
 from pathlib import Path
 
@@ -940,3 +941,258 @@ def test_long_running_services_restart_but_one_shots_do_not():
         assert services[name].get("restart") == "unless-stopped", f"{name} ne redemarre pas"
 
     assert "restart" not in services["airflow-init"]
+
+
+def test_every_dependency_waits_for_readiness_not_just_startup():
+    """
+    La forme courte ``depends_on: [x]`` n'attend que le DEMARRAGE du conteneur.
+
+    C'est ce qui faisait sortir Kafka : Zookeeper etait "demarre" mais
+    n'acceptait pas encore de connexion, et Kafka abandonnait au bout de ses
+    18 s par defaut. Toute dependance doit donc porter une condition explicite,
+    et tout service dont on depend doit savoir dire quand il est pret.
+    """
+    yaml = pytest.importorskip("yaml", reason="PyYAML absent hors conteneur")
+    compose = Path(__file__).resolve().parent.parent / "docker" / "docker-compose.yml"
+    services = yaml.safe_load(compose.read_text(encoding="utf-8"))["services"]
+
+    depended_on = set()
+    for name, spec in services.items():
+        dependencies = spec.get("depends_on")
+        if not dependencies:
+            continue
+        assert isinstance(dependencies, dict), (
+            f"{name} : depends_on en forme courte — n'attend pas la disponibilite")
+        for target, rule in dependencies.items():
+            assert rule.get("condition"), f"{name} -> {target} : condition absente"
+            depended_on.add((target, rule["condition"]))
+
+    for target, condition in depended_on:
+        if condition == "service_healthy":
+            assert services[target].get("healthcheck"), (
+                f"{target} : attendu 'healthy' mais aucun healthcheck defini")
+
+
+def test_healthchecks_never_depend_on_a_jvm_tool():
+    """
+    Une sonde qui lance un outil JVM (kafka-topics, hdfs) met souvent plus de
+    temps a demarrer que son propre timeout : elle echoue alors meme service
+    parfaitement sain. Les sondes du projet sont des tests TCP.
+    """
+    yaml = pytest.importorskip("yaml", reason="PyYAML absent hors conteneur")
+    compose = Path(__file__).resolve().parent.parent / "docker" / "docker-compose.yml"
+    services = yaml.safe_load(compose.read_text(encoding="utf-8"))["services"]
+
+    for name, spec in services.items():
+        check = spec.get("healthcheck")
+        if not check:
+            continue
+        command = " ".join(check["test"])
+        for jvm_tool in ("kafka-topics", "hdfs ", "spark-submit", "zookeeper-shell"):
+            assert jvm_tool not in command, f"{name} : sonde basee sur {jvm_tool}"
+        # Le timeout doit laisser de la marge a la sonde elle-meme.
+        assert check.get("timeout"), f"{name} : timeout de sonde non defini"
+
+
+def test_services_do_not_rely_on_env_vars_their_image_ignores():
+    """
+    SPARK_MODE / SPARK_MASTER_URL appartiennent a l'image bitnami/spark.
+
+    L'image officielle apache/spark les ignore : sans ``command:`` explicite,
+    aucun processus Master ne demarre, rien n'ecoute sur 7077, et pourtant le
+    conteneur affiche "Started". Tous les jobs spark-submit echouaient alors a
+    se connecter — une panne invisible jusqu'a la premiere tache Spark.
+    """
+    yaml = pytest.importorskip("yaml", reason="PyYAML absent hors conteneur")
+    compose = Path(__file__).resolve().parent.parent / "docker" / "docker-compose.yml"
+    raw = compose.read_text(encoding="utf-8")
+    services = yaml.safe_load(raw)["services"]
+
+    bitnami_only = ("SPARK_MODE", "SPARK_MASTER_URL", "SPARK_WORKER_MEMORY",
+                    "SPARK_WORKER_CORES")
+    for name in ("spark-master", "spark-worker"):
+        spec = services[name]
+        environment = spec.get("environment") or {}
+        for variable in bitnami_only:
+            assert variable not in environment, (
+                f"{name} : {variable} est une convention bitnami, "
+                f"ignoree par l'image officielle apache/spark")
+        command = spec.get("command")
+        assert command, f"{name} : aucune commande explicite — rien ne demarrera"
+        assert any("spark-class" in str(part) for part in command), (
+            f"{name} : le processus Spark doit etre lance explicitement")
+
+    # Le Master doit etre lance avant que le Worker ne tente de s'y connecter.
+    assert "org.apache.spark.deploy.master.Master" in " ".join(
+        str(p) for p in services["spark-master"]["command"])
+    assert "org.apache.spark.deploy.worker.Worker" in " ".join(
+        str(p) for p in services["spark-worker"]["command"])
+
+
+def test_healthchecks_target_the_address_the_service_binds_to():
+    """
+    Un service lie a --host <nom> n'ecoute PAS sur la loopback.
+
+    Le Namenode nous l'a deja appris : sonder localhost echouait alors que le
+    service etait parfaitement sain. Les sondes des services concernes doivent
+    donc viser leur nom d'hote.
+    """
+    yaml = pytest.importorskip("yaml", reason="PyYAML absent hors conteneur")
+    compose = Path(__file__).resolve().parent.parent / "docker" / "docker-compose.yml"
+    services = yaml.safe_load(compose.read_text(encoding="utf-8"))["services"]
+
+    for name in ("spark-master", "namenode"):
+        probe = " ".join(services[name]["healthcheck"]["test"])
+        assert name in probe, (
+            f"{name} : la sonde doit viser le nom d'hote, pas seulement localhost")
+
+
+# ===========================================================================
+# PERFORMANCE : un seul calcul, des appels natifs, un checkpoint groupe
+# ===========================================================================
+
+def test_success_glob_pattern():
+    """Un seul motif glob remplace un appel par partition."""
+    assert silver_transform.success_glob("hdfs://namenode:9000/silver/meteo") == (
+        "hdfs://namenode:9000/silver/meteo/dt=*/_SUCCESS")
+    # La barre finale ne doit pas doubler.
+    assert silver_transform.success_glob("/gold/meteo/daily_aggregates/") == (
+        "/gold/meteo/daily_aggregates/dt=*/_SUCCESS")
+    # Le prefixe de partition est parametrable (Gold utilise aussi month=).
+    assert silver_transform.success_glob("/gold/meteo/climate_profile", "month=") == (
+        "/gold/meteo/climate_profile/month=*/_SUCCESS")
+
+
+def test_partition_value_from_path():
+    parse = silver_transform.partition_value_from_path
+    assert parse("hdfs://namenode:9000/silver/meteo/dt=2025-01-15/_SUCCESS") == "2025-01-15"
+    assert parse("/gold/meteo/daily_aggregates/dt=2024-12-31/_SUCCESS") == "2024-12-31"
+    assert parse("/gold/meteo/climate_profile/month=7/_SUCCESS", "month=") == "7"
+    # Racine de table, chemin vide, prefixe absent : rien a extraire.
+    assert parse("/silver/meteo/_SUCCESS") is None
+    assert parse("") is None
+    assert parse(None) is None
+    assert parse("/silver/meteo/dt=/_SUCCESS") is None
+
+
+def test_mark_many_is_one_write_not_n():
+    """
+    Marquer les partitions une a une relit et rereecrit tout l'etat a chaque
+    fois : cout quadratique en octets et un aller-retour par partition.
+    """
+    state = checkpoint.new_state("silver")
+    dts = [f"2025-01-{day:02d}" for day in range(1, 32)]
+
+    grouped = checkpoint.mark_many_in(state, dts)
+    assert len(grouped["done"]) == 31
+    # Fonction pure : l'etat d'origine est intact.
+    assert state["done"] == []
+
+    # Resultat identique au marquage un par un — mais en une seule ecriture.
+    one_by_one = state
+    for dt_value in dts:
+        one_by_one = checkpoint.mark_done_in(one_by_one, dt_value)
+    assert grouped["done"] == one_by_one["done"]
+
+    # Idempotent, et tolerant aux entrees vides.
+    assert checkpoint.mark_many_in(grouped, dts)["done"] == grouped["done"]
+    assert checkpoint.mark_many_in(state, [])["done"] == []
+    assert checkpoint.mark_many_in(state, ["", "  "])["done"] == []
+
+
+def test_mark_many_roundtrip(cp):
+    cp.reset(cp.STAGE_SILVER)
+    dts = ["2025-03-01", "2025-03-02", "2025-03-03"]
+    assert cp.mark_many(cp.STAGE_SILVER, dts) is True
+    assert cp.pending_keys(cp.STAGE_SILVER, dts + ["2025-03-04"]) == ["2025-03-04"]
+    # Un lot vide ne provoque aucune ecriture inutile.
+    assert cp.mark_many(cp.STAGE_SILVER, []) is True
+
+
+def test_spark_jobs_use_native_hdfs_not_webhdfs():
+    """
+    Un job Spark parle deja HDFS nativement : passer par WebHDFS/REST ajoute
+    un aller-retour HTTP par partition (des milliers sur quatre ans de
+    donnees) pour un service que la JVM rend gratuitement.
+    """
+    scripts = Path(__file__).resolve().parent.parent / "scripts"
+    for name in ("silver_transform.py", "gold_transform.py", "streaming_ingest.py"):
+        source = (scripts / name).read_text(encoding="utf-8")
+        assert "hdfs_utils" not in source, (
+            f"{name} : appels WebHDFS dans un job Spark — utiliser le "
+            f"FileSystem Hadoop natif")
+
+
+def test_silver_computes_the_pipeline_only_once():
+    """
+    ``collect()`` materialise tout le pipeline Silver ; sans persistance,
+    l'ecriture le recalculait INTEGRALEMENT une seconde fois.
+    """
+    source = (Path(__file__).resolve().parent.parent / "scripts"
+              / "silver_transform.py").read_text(encoding="utf-8")
+    body = source.split("def write_silver(")[1].split("\ndef ")[0]
+
+    assert "persist(" in body, "write_silver : DataFrame non persiste avant collect()"
+    assert "unpersist()" in body, "write_silver : persistance jamais liberee"
+    assert body.index("persist(") < body.index(".collect()"), (
+        "la persistance doit precederle collect(), sinon elle ne sert a rien")
+    assert "mark_many" in body, "write_silver : checkpoint partition par partition"
+
+
+def test_streaming_writes_each_micro_batch_once():
+    """
+    L'ancienne boucle filtrait le micro-batch une fois PAR HEURE : le parsing
+    JSON etait recalcule N+2 fois (distinct, N heures, count) toutes les
+    30 secondes. Une ecriture partitionnee produit la meme arborescence en un
+    seul job.
+    """
+    source = (Path(__file__).resolve().parent.parent / "scripts"
+              / "streaming_ingest.py").read_text(encoding="utf-8")
+    body = source.split("def write_batch(")[1].split("\ndef ")[0]
+
+    assert "partitionBy(" in body, "write_batch : ecriture heure par heure"
+    assert "persist(" in body and "unpersist()" in body
+    # Plus de boucle d'ecriture : un seul writer Spark dans la fonction.
+    # (\b et la negation de '_' evitent de compter write_marker_paths.)
+    writers = re.findall(r"\.write\b(?!_)", body)
+    assert len(writers) == 1, f"write_batch : {len(writers)} writers Spark, attendu 1"
+    assert body.count(".text(") == 1, "write_batch : ecriture texte dans une boucle"
+
+
+def test_host_port_8080_is_never_published():
+    """
+    8080 est volontairement laisse libre sur l'hote : c'est le port le plus
+    souvent deja occupe (autre projet, proxy, IDE). Les ports INTERNES des
+    conteneurs restent inchanges — seule la partie hote du mapping compte.
+    """
+    yaml = pytest.importorskip("yaml", reason="PyYAML absent hors conteneur")
+    root = Path(__file__).resolve().parent.parent
+    compose = yaml.safe_load((root / "docker" / "docker-compose.yml").read_text(encoding="utf-8"))
+
+    env = {}
+    for line in (root / "docker" / ".env").read_text(encoding="utf-8").splitlines():
+        if "=" in line and not line.strip().startswith("#"):
+            key, _, value = line.partition("=")
+            env[key.strip()] = value.strip()
+
+    def host_port(mapping: str) -> str:
+        """Partie hote d'un mapping 'hote:conteneur', variables resolues."""
+        raw = str(mapping).split(":")[0]
+        if raw.startswith("${"):
+            name, _, default = raw[2:].rstrip("}").partition(":-")
+            return env.get(name, default)
+        return raw
+
+    published = {}
+    for name, spec in compose["services"].items():
+        for mapping in (spec.get("ports") or []):
+            published.setdefault(host_port(mapping), []).append(name)
+
+    assert "8080" not in published, (
+        f"port hote 8080 publie par {published.get('8080')} — il doit rester libre")
+    assert published.get("8082") == ["airflow-webserver"], (
+        f"l'UI Airflow doit etre sur 8082, trouve : {published.get('8082')}")
+
+    # Aucun port hote ne doit etre publie deux fois.
+    collisions = {port: names for port, names in published.items() if len(names) > 1}
+    assert not collisions, f"ports hote en conflit : {collisions}"

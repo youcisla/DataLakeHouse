@@ -103,7 +103,7 @@ case "${1:-up}" in
     info " Cluster prêt :"
     info "  - HDFS UI     : http://localhost:9870"
     info "  - Spark UI    : http://localhost:8081"
-    info "  - Airflow     : http://localhost:8080/  (admin / admin)"
+    info "  - Airflow     : http://localhost:${AIRFLOW_WEB_PORT:-8082}/  (admin / admin)"
     info "  - Jupyter     : http://localhost:8888/  (token: meteo)"
     info "  - Dashboard   : http://localhost:8501"
     info "  - Kafka       : localhost:9092 (topic: meteo-stream)"
@@ -155,7 +155,7 @@ case "${1:-up}" in
   trigger)
     info "Déclenchement du DAG dag_bronze_ingest..."
     "${COMPOSE[@]}" exec -T airflow-webserver airflow dags trigger dag_bronze_ingest
-    info "DAG déclenché. Suivez-le sur http://localhost:8080"
+    info "DAG déclenché. Suivez-le sur http://localhost:${AIRFLOW_WEB_PORT:-8082}"
     ;;
 
   *)

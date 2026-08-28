@@ -116,6 +116,22 @@ def mark_done_in(state: Dict[str, Any], key: str) -> Dict[str, Any]:
     return updated
 
 
+def mark_many_in(state: Dict[str, Any], keys: List[str]) -> Dict[str, Any]:
+    """
+    Marque PLUSIEURS unites d'un coup (fonction pure).
+
+    Indispensable des que les unites se comptent en centaines : marquer une a
+    une relit et rereecrit tout l'etat a chaque fois — un cout quadratique en
+    octets transferes, pour des milliers d'aller-retours HTTP.
+    """
+    done = set(state.get("done", []))
+    done.update(str(key) for key in keys if str(key).strip())
+    updated = dict(state)
+    updated["done"] = sorted(done)
+    updated["updated_at"] = _now()
+    return updated
+
+
 def forget_in(state: Dict[str, Any], key: str) -> Dict[str, Any]:
     """Retourne un NOUVEL etat ou ``key`` n'est plus marquee (pour rejouer)."""
     done = set(state.get("done", []))
@@ -287,6 +303,19 @@ def mark_done(stage: str, key: str) -> bool:
     que l'unite en cours, jamais un lot de N unites.
     """
     return save(stage, mark_done_in(load(stage), key))
+
+
+def mark_many(stage: str, keys: List[str]) -> bool:
+    """
+    Marque un lot d'unites en UNE lecture et UNE ecriture.
+
+    A utiliser pour Silver et Gold, dont les unites (partitions dt) se comptent
+    en milliers. Bronze conserve ``mark_done`` unite par unite : ses lots sont
+    peu nombreux et longs, le commit immediat y est le bon compromis.
+    """
+    if not keys:
+        return True
+    return save(stage, mark_many_in(load(stage), keys))
 
 
 def forget(stage: str, key: str) -> bool:

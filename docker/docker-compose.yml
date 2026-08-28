@@ -115,6 +115,15 @@ services:
       ZOOKEEPER_TICK_TIME: 2000
     volumes:
       - zookeeper_data:/var/lib/zookeeper/data
+    # Sonde TCP en bash : sans elle, Kafka demarrait avant que Zookeeper
+    # n'accepte les connexions et sortait au bout de 18 s
+    # ("Timed out waiting for connection while in state: CONNECTING").
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/2181'"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
     networks: [meteo-net]
 
   kafka:
@@ -133,16 +142,27 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_MESSAGE_MAX_BYTES: 10485760
+      # Marge au-dela des 18 s par defaut : meme si Zookeeper repond au TCP
+      # avant d'etre pleinement operationnel, Kafka patiente au lieu de sortir.
+      KAFKA_ZOOKEEPER_CONNECTION_TIMEOUT_MS: 60000
+      KAFKA_ZOOKEEPER_SESSION_TIMEOUT_MS: 60000
     ports:
       - "9092:9092"
-    depends_on: [zookeeper]
+    # La forme courte "depends_on: [zookeeper]" n'attend que le DEMARRAGE du
+    # conteneur, pas sa disponibilite : c'est ce qui faisait sortir Kafka.
+    depends_on:
+      zookeeper:
+        condition: service_healthy
     volumes:
       - kafka_data:/var/lib/kafka/data
+    # kafka-topics est un outil JVM : son seul demarrage depasse souvent le
+    # timeout de 10 s, si bien que la sonde echouait meme broker sain.
+    # Une sonde TCP repond en quelques millisecondes.
     healthcheck:
-      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
-      interval: 15s
+      test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/9092'"]
+      interval: 10s
       timeout: 10s
-      retries: 20
+      retries: 30
       start_period: 30s
     networks: [meteo-net]
 
@@ -158,14 +178,32 @@ services:
     restart: unless-stopped
     hostname: spark-master
     environment:
-      SPARK_MODE: master
-      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
-      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      # ATTENTION : SPARK_MODE / SPARK_MASTER_URL sont des conventions de
+      # l'image bitnami/spark. L'image OFFICIELLE apache/spark les IGNORE :
+      # sans "command:" explicite, aucun processus Master ne demarrait et
+      # rien n'ecoutait sur 7077. Les conteneurs paraissaient "Started", mais
+      # tout job spark-submit aurait echoue a se connecter au cluster.
+      SPARK_NO_DAEMONIZE: "true"
       SPARK_LOCAL_IP: spark-master
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.master.Master
+      - --host
+      - spark-master
+      - --port
+      - "7077"
+      - --webui-port
+      - "8080"
     ports:
-      - "8081:8080"   # UI Spark Master (8080 est réservé à Airflow)
+      - "8081:8080"   # UI Spark Master (port hote 8080 laisse libre)
       - "7077:7077"   # Standalone
       - "4040:4040"   # UI du driver Spark (à la demande)
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import socket; socket.create_connection(('spark-master', 7077), 5).close()\""]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
     volumes:
       - ..:/opt/project
       - meteofrance_cache:/opt/data/meteofrance
@@ -180,12 +218,23 @@ services:
     restart: unless-stopped
     hostname: spark-worker
     environment:
-      SPARK_MODE: worker
-      SPARK_MASTER_URL: spark://spark-master:7077
-      SPARK_WORKER_MEMORY: 3g
-      SPARK_WORKER_CORES: 2
+      SPARK_NO_DAEMONIZE: "true"
       SPARK_LOCAL_IP: spark-worker
-    depends_on: [spark-master]
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.worker.Worker
+      - spark://spark-master:7077
+      - --cores
+      - "2"
+      - --memory
+      - 3g
+      - --webui-port
+      - "8081"
+    # Forme longue : sans elle le worker boucle en "Failed to connect to master"
+    # tant que le master n'ecoute pas encore sur 7077.
+    depends_on:
+      spark-master:
+        condition: service_healthy
     volumes:
       - ..:/opt/project
       - meteofrance_cache:/opt/data/meteofrance
@@ -259,7 +308,7 @@ services:
     environment: *airflow-env
     command: ["airflow", "webserver", "--port", "8080"]
     ports:
-      - "${AIRFLOW_WEB_PORT:-8080}:8080"
+      - "${AIRFLOW_WEB_PORT:-8082}:8080"
     depends_on:
       airflow-init:
         condition: service_completed_successfully
