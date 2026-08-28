@@ -421,6 +421,38 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
     return code
 
 
+def cmd_ml(args: argparse.Namespace) -> int:
+    """
+    Entraine le modele XGBoost (dag_ml_retrain) a partir du Silver.
+
+    Doit tourner APRES le pipeline : les features se lisent dans /silver/meteo.
+    """
+    if skip_if_done("ml", args.force):
+        return 0
+    code = trigger_and_wait(["dag_ml_retrain"], "dag_ml_retrain", args.timeout, args.poll)
+    if code == 0:
+        complete_step("ml")
+    return code
+
+
+def cmd_predict(args: argparse.Namespace) -> int:
+    """
+    Rejoue le DAG Gold une fois le modele entraine.
+
+    Au premier passage l'inference se saute faute de modele et le bulletin IA
+    part en repli ; ce second passage produit les vraies predictions J+1.
+    gold_transform saute les partitions deja calculees (--only-new) : seules
+    les taches inference et bulletin refont du travail.
+    """
+    if skip_if_done("predict", args.force):
+        return 0
+    code = trigger_and_wait(["dag_gold_aggregate"], "dag_gold_aggregate",
+                            args.timeout, args.poll)
+    if code == 0:
+        complete_step("predict")
+    return code
+
+
 def cmd_wait(args: argparse.Namespace) -> int:
     """Attend la chaîne sans rien déclencher."""
     return wait_for_dags(PIPELINE_DAGS, {dag: set() for dag in PIPELINE_DAGS},
@@ -579,12 +611,17 @@ def build_parser() -> argparse.ArgumentParser:
     trigger.add_argument("dag")
     trigger.set_defaults(func=cmd_trigger)
 
-    step = sub.add_parser("pipeline", help="Bronze -> Silver -> Gold, puis attente")
-    step.add_argument("--timeout", type=int,
-                      default=int(os.environ.get("PIPELINE_TIMEOUT", "2400")))
-    step.add_argument("--poll", type=int, default=10)
-    step.add_argument("--force", action="store_true", help="Rejouer meme si deja fait.")
-    step.set_defaults(func=cmd_pipeline)
+    for name, func, helptext in (
+        ("pipeline", cmd_pipeline, "Bronze -> Silver -> Gold, puis attente"),
+        ("ml", cmd_ml, "Entraine le modele XGBoost depuis le Silver"),
+        ("predict", cmd_predict, "Rejoue Gold pour produire les predictions J+1"),
+    ):
+        step = sub.add_parser(name, help=helptext)
+        step.add_argument("--timeout", type=int,
+                          default=int(os.environ.get("PIPELINE_TIMEOUT", "2400")))
+        step.add_argument("--poll", type=int, default=10)
+        step.add_argument("--force", action="store_true", help="Rejouer meme si deja fait.")
+        step.set_defaults(func=func)
 
     wait = sub.add_parser("wait", help="Attend la chaine sans declencher")
     wait.add_argument("--timeout", type=int,

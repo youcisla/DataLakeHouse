@@ -1324,3 +1324,78 @@ def test_no_makefile_recipe_requires_a_host_toolchain():
                 if body.startswith(tool):
                     offenders.append((current, body[:60]))
     assert not offenders, f"recettes dependant d'un outil hote : {offenders}"
+
+
+# ===========================================================================
+# DEPLOIEMENT VERCEL : le site ne doit jamais basculer sur le runtime Python
+# ===========================================================================
+
+#: Noms de fichiers que Vercel charge comme point d'entree Python.
+#: https://vercel.com/docs/functions/runtimes/python#python-entrypoints
+VERCEL_PYTHON_ENTRYPOINTS = {
+    "app.py", "index.py", "server.py", "main.py", "wsgi.py", "asgi.py", "manage.py",
+}
+
+#: Manifestes qui declenchent la detection d'un framework Python.
+VERCEL_PYTHON_MANIFESTS = {"requirements.txt", "pyproject.toml", "Pipfile", "Pipfile.lock"}
+
+
+def test_web_project_cannot_be_detected_as_a_python_app():
+    """
+    Vercel cherche un point d'entree Python a la racine du projet ET
+    **dans `src/` ou `app/`**. Or l'App Router de Next.js vit precisement dans
+    `web/app/` : un simple `web/app/index.py` suffirait a faire basculer le
+    projet sur le runtime Python, et le site cesserait de se construire.
+    """
+    web = Path(__file__).resolve().parent.parent / "web"
+    for directory in (web, web / "src", web / "app"):
+        if not directory.exists():
+            continue
+        for name in VERCEL_PYTHON_ENTRYPOINTS:
+            assert not (directory / name).exists(), (
+                f"{directory.name}/{name} ferait basculer Vercel sur le runtime Python")
+
+    for manifest in VERCEL_PYTHON_MANIFESTS:
+        assert not (web / manifest).exists(), (
+            f"web/{manifest} declencherait la detection d'un framework Python")
+
+
+def test_web_project_declares_its_framework():
+    """
+    `framework: nextjs` fige la detection : le deploiement ne depend plus de
+    l'heuristique de Vercel ni d'un reglage oublie dans le tableau de bord.
+    """
+    import json as _json
+
+    web = Path(__file__).resolve().parent.parent / "web"
+    config = _json.loads((web / "vercel.json").read_text(encoding="utf-8"))
+    assert config["framework"] == "nextjs"
+    # On ne surcharge NI buildCommand NI outputDirectory : avec
+    # `output: "export"`, Next ecrit dans out/ et le builder Vercel le sait.
+    # Les figer ici est le moyen le plus courant de casser le deploiement.
+    assert "outputDirectory" not in config
+    assert "buildCommand" not in config
+
+    # package.json doit rester le seul manifeste du projet.
+    assert (web / "package.json").exists()
+
+
+def test_phony_covers_targets_that_collide_with_directories():
+    """
+    `make ml` ne faisait RIEN : un repertoire `ml/` existe a la racine, donc
+    make considerait la cible a jour et la sautait en silence. C'est
+    exactement le role de .PHONY — et le genre de panne qui ne dit rien.
+    """
+    root = Path(__file__).resolve().parent.parent
+    makefile = (root / "Makefile").read_text(encoding="utf-8")
+
+    match = re.search(r"\.PHONY:\s*((?:.|\\\n)*?)\n\n", makefile)
+    assert match, ".PHONY introuvable"
+    phony = set(match.group(1).replace("\\\n", " ").split())
+    targets = set(re.findall(r"^([a-zA-Z][a-zA-Z0-9_-]*):(?!=)", makefile, re.M))
+
+    assert not (targets - phony), f"cibles hors .PHONY : {sorted(targets - phony)}"
+
+    # Toute cible homonyme d'un fichier/repertoire DOIT etre dans .PHONY.
+    colliding = {t for t in targets if (root / t).exists()}
+    assert colliding <= phony, f"cibles masquees par un fichier : {sorted(colliding - phony)}"

@@ -1,0 +1,17 @@
+# Vercel ne deploie que web/ (Root Directory = web). Tout le reste du depot est
+# inutile a la construction du site : l'exclure accelere l'upload et garantit
+# qu'aucun fichier Python ne puisse declencher la detection du runtime Python
+# (voir https://vercel.com/docs/functions/runtimes/python#python-entrypoints).
+airflow/
+configs/
+dashboard/
+data/
+docker/
+ml/
+"ML(SARA)"/
+scripts/
+tests/
+notebooks/
+*.pdf
+Makefile
+deploy.sh

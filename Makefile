@@ -52,7 +52,7 @@ PY               ?= python3
 .NOTPARALLEL:
 
 .PHONY: help all re doctor build test test-local lint dry-run up wait-services \
-        init topic unpause pipeline wait trigger bronze silver gold genai \
+        init topic unpause pipeline ml predict wait trigger bronze silver gold genai \
         export-web web-install web-dev web-build \
         checkpoints checkpoints-reset verify urls status ps logs stop down reset clean
 
@@ -105,7 +105,7 @@ help:  ## Affiche l aide - instantane, aucun conteneur demarre
 # =============================================================================
 #  LA CIBLE PRINCIPALE : tout le TP, de bout en bout, sans intervention
 # =============================================================================
-all: doctor build test up wait-services init topic unpause pipeline $(GENAI_STEP) verify export-web urls  ## TOUT : cluster, Bronze, Silver, Gold, ML, predictions, verification, vitrine en ligne. Relancable : reprend ou il s est arrete.
+all: doctor build test up wait-services init topic unpause pipeline ml predict $(GENAI_STEP) verify export-web urls  ## TOUT : cluster, Bronze, Silver, Gold, ML, predictions, verification, vitrine en ligne. Relancable : reprend ou il s est arrete.
 	@echo [make] Workflow termine : Medallion, ML et predictions en place et verifies.
 
 re: reset all  ## Reset complet, volumes compris, puis rejoue tout
@@ -177,6 +177,12 @@ silver:  ## Declenche dag_silver_transform, idempotent
 
 gold:  ## Declenche dag_gold_aggregate, idempotent
 	@$(CTL_AIRFLOW) trigger dag_gold_aggregate
+
+ml:  ## Entraine le modele XGBoost depuis le Silver, et attend la fin
+	@$(CTL_AIRFLOW) ml --timeout $(PIPELINE_TIMEOUT) $(FORCE_FLAG)
+
+predict:  ## Rejoue Gold une fois le modele pret : predictions J+1 et bulletin IA
+	@$(CTL_AIRFLOW) predict --timeout $(PIPELINE_TIMEOUT) $(FORCE_FLAG)
 
 genai:  ## Bonus : demarre Ollama et telecharge le modele des bulletins IA
 	@$(DC) --profile genai up -d ollama
