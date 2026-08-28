@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import tempfile
 import time
@@ -180,7 +181,9 @@ def _list_parquet_files(remote_dir: str, max_depth: int = 10) -> List[str]:
 
 
 def read_parquet_dir(remote_dir: str, local_dir: Optional[str] = None,
-                     max_files: int = 200) -> pd.DataFrame:
+                     max_files: int = 200,
+                     columns: Optional[List[str]] = None,
+                     partition_col: Optional[str] = None) -> pd.DataFrame:
     """
     Lit tous les fichiers *.parquet d'un répertoire HDFS (récursif) dans un DataFrame.
 
@@ -196,6 +199,13 @@ def read_parquet_dir(remote_dir: str, local_dir: Optional[str] = None,
         Répertoire local de destination (sinon tempfile.mkdtemp).
     max_files : int
         Nombre maximal de fichiers Parquet à lire (200 par défaut).
+    columns : Optional[List[str]]
+        Sous-ensemble de colonnes à lire (projection mémoire), ex.
+        ["city", "latitude", "longitude"] pour un catalogue de stations.
+    partition_col : Optional[str]
+        Nom d'une colonne de partition HDFS (ex. "year") à restituer : sa
+        valeur est lue dans le chemin `year=2000/...` et ajoutée au DataFrame,
+        car les colonnes de partition ne sont PAS stockées dans les Parquet.
 
     Retourne
     --------
@@ -221,7 +231,17 @@ def read_parquet_dir(remote_dir: str, local_dir: Optional[str] = None,
         local_path = os.path.join(tmpdir, f"part_{index:04d}.parquet")
         try:
             download_file(remote, local_path)
-            frames.append(pd.read_parquet(local_path))
+            frame = pd.read_parquet(local_path, columns=columns)
+            if partition_col:
+                match = re.search(r"/" + re.escape(partition_col) + r"=([^/]+)/", remote + "/")
+                if match:
+                    value: object = match.group(1)
+                    try:
+                        value = int(value)
+                    except ValueError:
+                        pass
+                    frame[partition_col] = value
+            frames.append(frame)
         except Exception as exc:  # fichier corrompu / réseau : on continue
             logger.warning("Impossible de lire %s : %s", remote, exc)
             continue
@@ -231,7 +251,8 @@ def read_parquet_dir(remote_dir: str, local_dir: Optional[str] = None,
 
 
 def read_gold_table(table: str, date_from: Optional[str] = None,
-                    date_to: Optional[str] = None) -> pd.DataFrame:
+                    date_to: Optional[str] = None,
+                    partition_col: Optional[str] = None) -> pd.DataFrame:
     """
     Wrapper de lecture d'une table Gold avec filtre optionnel sur la colonne dt.
 
@@ -241,13 +262,16 @@ def read_gold_table(table: str, date_from: Optional[str] = None,
         Nom de la table Gold (ex. daily_aggregates).
     date_from / date_to : Optional[str]
         Bornes de date (format YYYY-MM-DD ou convertible par pandas).
+    partition_col : Optional[str]
+        Colonne de partition HDFS a restituer (ex. "dt" pour ml_predictions,
+        "month" pour climate_profile) : sa valeur est lue dans le chemin.
 
     Retourne
     --------
     pd.DataFrame
         DataFrame de la table (filtré si dates fournies), vide si aucune donnée.
     """
-    df = _cached_read_parquet_dir(f"/gold/meteo/{table}")
+    df = _cached_read_parquet_dir(f"/gold/meteo/{table}", partition_col=partition_col)
     if df.empty or "dt" not in df.columns:
         return df.copy()
     dt_series = pd.to_datetime(df["dt"], errors="coerce")

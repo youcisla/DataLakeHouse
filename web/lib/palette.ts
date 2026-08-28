@@ -1,24 +1,24 @@
 "use client";
 import { useEffect, useState } from "react";
 
-/** Ordre fixe des villes et leurs couleurs (validées daltonisme). */
-export const CITY_ORDER = ["Paris", "Lyon", "Marseille", "Bordeaux", "Lille"] as const;
-export const CITY_COLORS: Record<string, string> = {
-  Paris: "#3987e5",
-  Lyon: "#eb6834",
-  Marseille: "#1baf7a",
-  Bordeaux: "#eda100",
-  Lille: "#e87ba4",
-};
+/** Rampes sequentielles claire -> foncee (light to dark, comme demande). */
+export const RAMP_TEMP = ["#fde725", "#a6d75b", "#5ec962", "#21918c", "#3b528b", "#440154"];
+export const RAMP_PRECIP = ["#f7fbff", "#c6dbef", "#9ecae1", "#6baed6", "#3182bd", "#08519c"];
+export const RAMP_ERROR = ["#fff5f0", "#fcbba1", "#fb6a4a", "#cb181d", "#67000d"];
 
-export function cityColor(city: string): string {
-  return CITY_COLORS[city] ?? "#8d99ae";
+/** Couleur d'une temperature (carte meteorologique, bandes continues). */
+export function tempColor(t: number | null): string {
+  if (t === null) return "#8d99ae";
+  if (t < 0) return "#3b82f6";
+  if (t < 8) return "#60a5fa";
+  if (t < 14) return "#2dd4bf";
+  if (t < 20) return "#4ade80";
+  if (t < 26) return "#facc15";
+  if (t < 32) return "#fb923c";
+  return "#ef4444";
 }
 
-/** Rampes séquentielles (viridis 7 classes, claire -> foncée). */
-export const VIRIDIS = ["#440154", "#3b528b", "#21918c", "#5ec962", "#a6d75b", "#fde725"];
-
-/** Couleurs de chart selon le thème (lues au rendu). */
+/** Couleurs de chart selon le theme (lues au rendu). */
 export function chartTheme(dark: boolean) {
   return dark
     ? { axis: "#7a7f8a", grid: "#26282e", text: "#e7eaf0", muted: "#8f98a6", tooltip: "#17181c", border: "#2a2d34", mapFill: "#1c2640", mapLine: "#364564" }

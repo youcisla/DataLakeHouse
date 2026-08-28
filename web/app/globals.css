@@ -106,6 +106,16 @@ button.toggle:hover { border-color: var(--accent); }
 .badge.si { background: var(--surface-2); color: var(--text-secondary); border-color: transparent; }
 .badge.go { background: #fbeecb; color: #8a6400; border-color: transparent; }
 
+/* Bande d'architecture Bronze -> Silver -> Gold -> ML */
+.archstrip { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 6px 0 10px; }
+.archstep { display: flex; align-items: center; gap: 10px; padding: 9px 14px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.archbadge { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: var(--accent);
+  padding: 2px 7px; border-radius: 6px; background: var(--accent-soft); }
+.archname { font-size: 13px; font-weight: 600; }
+.archnote { font-size: 12px; color: var(--text-muted); }
+.archarrow { color: var(--axis); font-size: 16px; }
+
 .nowstrip { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
 .nowcard { width: 100%; text-align: left; font: inherit; position: relative; overflow: hidden;
   border-radius: var(--radius); padding: 16px; border: 1px solid var(--border);
@@ -127,8 +137,8 @@ button.toggle:hover { border-color: var(--accent); }
 .kpi .kunit { font-size: 15px; font-weight: 500; color: var(--text-secondary); margin-left: 3px; }
 .kpi .knote { font-size: 12.5px; color: var(--text-muted); }
 
-.controls { position: sticky; top: 0; z-index: 40; display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
-  padding: 10px 0; margin: 20px 0; background: var(--plane); border-bottom: 1px solid var(--border); }
+.controls { display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
+  padding: 12px 0; margin: 24px 0; border-bottom: 1px solid var(--border); }
 .controlgroup { display: flex; gap: 6px; flex-wrap: wrap; }
 .chipbtn { font: inherit; font-size: 13px; cursor: pointer; padding: 6px 14px;
   border-radius: 999px; border: 1px solid var(--border); background: var(--surface);
@@ -144,6 +154,7 @@ button.toggle:hover { border-color: var(--accent); }
 section { margin-top: 56px; scroll-margin-top: 80px; }
 section h2 { font-size: 22px; margin: 0 0 6px; letter-spacing: -0.02em; text-wrap: balance; font-weight: 700; }
 blockquote { margin: 8px 0 16px; color: var(--text-secondary); font-size: 15px; font-style: italic; }
+.sectionlead { margin: 6px 0 16px; color: var(--text-secondary); font-size: 14.5px; }
 .duo { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
 .mapduo { grid-template-columns: minmax(0, 5fr) minmax(0, 4fr); }
 
@@ -156,6 +167,15 @@ blockquote { margin: 8px 0 16px; color: var(--text-secondary); font-size: 15px; 
 .swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
 .cname { flex: 1; font-weight: 600; }
 .cval { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.maplist.scroll { max-height: 460px; overflow-y: auto; }
+.search { width: 100%; font: inherit; font-size: 14px; color: var(--text-primary);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 12px; margin-bottom: 10px; }
+.search:focus { outline: none; border-color: var(--accent); }
+.picker { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); }
+.picker select { font: inherit; font-size: 13px; color: var(--text-primary);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 10px; max-width: 260px; }
 
 .seg { display: inline-flex; gap: 4px; padding: 4px; border: 1px solid var(--border);
   border-radius: 10px; background: var(--surface); margin-bottom: 12px; }
@@ -178,7 +198,11 @@ blockquote { margin: 8px 0 16px; color: var(--text-secondary); font-size: 15px; 
   background: color-mix(in srgb, currentColor 12%, transparent); }
 .status .dot { width: 8px; height: 8px; }
 
-.bulletin { white-space: pre-wrap; color: var(--text-secondary); font-size: 15px; line-height: 1.7; }
+.bulletin { color: var(--text-secondary); font-size: 15px; line-height: 1.7; }
+.bulletintext { white-space: pre-wrap; }
+.aitag { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.03em;
+  color: var(--accent); background: var(--accent-soft); border-radius: 999px;
+  padding: 3px 10px; margin-bottom: 10px; }
 .empty { color: var(--text-secondary); font-size: 14px; text-align: center; padding: 30px 18px; }
 .empty code { background: var(--plane); border: 1px solid var(--border);
   border-radius: 6px; padding: 2px 6px; font-size: 13px; }
