@@ -97,9 +97,9 @@ export function ClimateHeatmap({ data, months, cities, height = 320 }: {
       axisLabel: { color: c.muted, fontSize: 12 } },
     visualMap: { min, max, calculable: true, orient: "horizontal", left: "center", bottom: 0,
       itemHeight: 90, textStyle: { color: c.muted, fontSize: 10 },
-      inRange: { color: ["#440154", "#3b528b", "#21918c", "#5ec962", "#a6d75b", "#fde725"] } },
+      inRange: { color: ["#fde725", "#a6d75b", "#5ec962", "#21918c", "#3b528b", "#440154"] } },
     series: [{ type: "heatmap", data,
-      label: { show: true, color: "#fff", fontSize: 10, formatter: (p: any) => p.value[2].toFixed(0) },
+      label: { show: true, fontSize: 10, color: (p: any) => (p.value[2] < (min + max) / 2 ? "#1a1d24" : "#ffffff"), formatter: (p: any) => p.value[2].toFixed(0) },
       itemStyle: { borderColor: c.tooltip, borderWidth: 2 },
       emphasis: { itemStyle: { shadowBlur: 8, shadowColor: "rgba(0,0,0,.3)" } } }],
   };

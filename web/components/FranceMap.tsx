@@ -1,9 +1,13 @@
 "use client";
 
-import { useState } from "react";
-import { corsicaPath, francePath, project } from "@/lib/france";
+import * as echarts from "echarts/core";
+import franceGeo from "@/lib/france-regions.json";
+import EChart from "./EChart";
+import { chartTheme, useTheme } from "@/lib/palette";
 
-export function tempColor(t: number | null): string {
+echarts.registerMap("france", franceGeo as any);
+
+function tempColor(t: number | null): string {
   if (t === null) return "#8d99ae";
   if (t < 0) return "#3b82f6";
   if (t < 8) return "#60a5fa";
@@ -19,41 +23,39 @@ export default function FranceMap({ points, selected, onSelect }: {
   selected: string | null;
   onSelect: (city: string | null) => void;
 }) {
-  const W = 420, H = 460;
-  const [hover, setHover] = useState<string | null>(null);
+  const theme = useTheme();
+  const c = chartTheme(theme === "dark");
+  const option = {
+    backgroundColor: "transparent",
+    tooltip: {
+      trigger: "item", backgroundColor: c.tooltip, borderColor: c.border,
+      textStyle: { color: c.text, fontSize: 12 },
+      formatter: (p: any) => p.name + " · " + (p.value[2] === null ? "–" : p.value[2].toFixed(1) + " °C"),
+    },
+    geo: {
+      map: "france", roam: true, center: [2.4, 46.6], zoom: 1.05, silent: true,
+      itemStyle: { areaColor: c.mapFill, borderColor: c.mapLine, borderWidth: 1 },
+      emphasis: { itemStyle: { areaColor: c.mapFill }, label: { show: false } },
+      label: { show: false },
+    },
+    series: [{
+      type: "scatter", coordinateSystem: "geo",
+      data: points.map((p) => ({ name: p.city, value: [p.lon, p.lat, p.temperature] })),
+      symbolSize: (v: any, params: any) => (params.name === selected ? 22 : 13),
+      itemStyle: {
+        color: (params: any) => tempColor(params.value[2]),
+        shadowBlur: 8, shadowColor: "rgba(0,0,0,0.35)",
+        borderColor: (params: any) => params.name === selected ? c.tooltip : "transparent", borderWidth: 2,
+      },
+      label: {
+        show: true, formatter: "{b}", position: "top", color: c.text, fontSize: 11,
+        textBorderColor: c.tooltip, textBorderWidth: 2,
+      },
+      emphasis: { scale: 1.5 },
+    }],
+  };
   return (
-    <svg viewBox={"0 0 " + W + " " + H} role="img" aria-label="Carte de France des températures par ville"
-      style={{ width: "100%", height: "auto", display: "block" }}>
-      <path d={francePath(W, H)} style={{ fill: "var(--map-fill)", stroke: "var(--map-line)" }} strokeWidth={1.5} />
-      <path d={corsicaPath(W, H)} style={{ fill: "var(--map-fill)", stroke: "var(--map-line)" }} strokeWidth={1.5} />
-      {points.map((p) => {
-        const [x, y] = project(p.lon, p.lat, W, H);
-        const isSel = selected === p.city;
-        const isHover = hover === p.city;
-        const r = isSel ? 13 : isHover ? 11 : 9;
-        return (
-          <g key={p.city}
-            onMouseEnter={() => setHover(p.city)}
-            onMouseLeave={() => setHover(null)}
-            onClick={() => onSelect(isSel ? null : p.city)}
-            style={{ cursor: "pointer" }}>
-            <circle cx={x} cy={y} r={r} fill={tempColor(p.temperature)}
-              style={{ stroke: "var(--plane)", transition: "r .15s, opacity .15s" }}
-              strokeWidth={2} opacity={selected && !isSel ? 0.35 : 1} />
-            {isSel ? <circle cx={x} cy={y} r={r + 4} fill="none"
-              style={{ stroke: "var(--accent)" }} strokeWidth={2} /> : null}
-            <text x={x} y={y - r - 6} textAnchor="middle"
-              style={{ fill: "var(--text-secondary)", fontSize: 12, fontWeight: 600 }}>
-              {p.city}
-            </text>
-            {(isHover || isSel) ? (
-              <text x={x} y={y + r + 15} textAnchor="middle"
-                style={{ fill: "var(--text-primary)", fontSize: 12 }}>
-                {p.temperature === null ? "–" : p.temperature.toFixed(1) + " °C"}
-              </text>) : null}
-          </g>
-        );
-      })}
-    </svg>
+    <EChart option={option} height={460}
+      onClick={(p: any) => onSelect(p.name === selected ? null : p.name)} />
   );
 }

@@ -21,8 +21,8 @@ export const VIRIDIS = ["#440154", "#3b528b", "#21918c", "#5ec962", "#a6d75b", "
 /** Couleurs de chart selon le thème (lues au rendu). */
 export function chartTheme(dark: boolean) {
   return dark
-    ? { axis: "#7a7f8a", grid: "#26282e", text: "#e7eaf0", muted: "#8f98a6", tooltip: "#17181c", border: "#2a2d34" }
-    : { axis: "#a2a7b0", grid: "#e6e7eb", text: "#1a1d24", muted: "#5b616c", tooltip: "#ffffff", border: "#d8dbe0" };
+    ? { axis: "#7a7f8a", grid: "#26282e", text: "#e7eaf0", muted: "#8f98a6", tooltip: "#17181c", border: "#2a2d34", mapFill: "#1c2640", mapLine: "#364564" }
+    : { axis: "#a2a7b0", grid: "#e6e7eb", text: "#1a1d24", muted: "#5b616c", tooltip: "#ffffff", border: "#d8dbe0", mapFill: "#e8edf4", mapLine: "#b8c4d4" };
 }
 
 /** Hook theme : suit l'attribut data-theme du document. */
