@@ -331,7 +331,7 @@ def build_spark_session(app_name: str) -> "SparkSession":
         .appName(app_name)
         .master(master)
         .config("spark.sql.parquet.compression.codec", "zstd")
-        .config("spark.sql.parquet.compression.codec.zstd.level", "22")
+        .config("spark.sql.parquet.compression.codec.zstd.level", "3")
         .config("spark.sql.parquet.partitionOverwriteMode", "dynamic")
         .config("spark.sql.session.timeZone", "UTC")
         .getOrCreate()
@@ -351,7 +351,7 @@ def _write_parquet_dynamic(df: "DataFrame", hdfs_path: str, partition_cols: List
         .mode("overwrite")
         .option("partitionOverwriteMode", "dynamic")
         .option("compression", "zstd")
-        .option("compression.level", "22")
+        .option("compression.level", "3")
         .parquet(hdfs_path)
     )
 
