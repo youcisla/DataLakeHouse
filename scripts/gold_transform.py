@@ -2,10 +2,14 @@
 """
 gold_transform.py : job Spark « Silver vers Gold » (DataLake Météo).
 =====================================================================
-Lit le Silver (/silver/meteo) et produit trois agrégats Gold :
+Lit le Silver (/silver/meteo) et produit quatre agrégats Gold :
     1. daily_aggregates  : agrégats quotidiens par (dt, city, source) ;
     2. weekly_trends     : tendances hebdomadaires + pente de régression ;
-    3. extreme_events    : événements extrêmes via classify_extreme.
+    3. extreme_events    : événements extrêmes via classify_extreme ;
+    4. climate_profile   : « profil météo » mensuel par ville (normales
+       climatiques, amplitude thermique, jours de pluie, saison) construit
+       depuis les archives Météo-France — l'équivalent météo d'un profil
+       client, et le socle des features du modèle ML.
 
 Conception :
     - Les imports pyspark sont réalisés À L'INTÉRIEUR des fonctions pour
@@ -68,6 +72,44 @@ def linear_slope(xs: List[float], ys: List[float]) -> float:
     if denominator == 0.0:
         return 0.0
     return (n * sum_xy - sum_x * sum_y) / denominator
+
+
+def season_of_month(month) -> str:
+    """
+    Saison météorologique (hémisphère nord) d'un mois.
+
+    hiver : 12, 1, 2 · printemps : 3-5 · été : 6-8 · automne : 9-11.
+    Retourne "" si le mois est invalide ou manquant.
+    """
+    try:
+        value = int(month)
+    except (TypeError, ValueError):
+        return ""
+    if value in (12, 1, 2):
+        return "hiver"
+    if value in (3, 4, 5):
+        return "printemps"
+    if value in (6, 7, 8):
+        return "ete"
+    if value in (9, 10, 11):
+        return "automne"
+    return ""
+
+
+def rain_day_ratio(rain_days, total_days) -> float:
+    """
+    Part de jours de pluie sur la période (0.0 -> 1.0, arrondie à 3 décimales).
+
+    Retourne 0.0 si le dénominateur est nul, négatif ou non numérique.
+    """
+    try:
+        rain = float(rain_days)
+        total = float(total_days)
+    except (TypeError, ValueError):
+        return 0.0
+    if total <= 0:
+        return 0.0
+    return round(max(0.0, min(rain / total, 1.0)), 3)
 
 
 def _format_date(dt) -> str:
@@ -337,12 +379,68 @@ def compute_extreme_events(daily: "DataFrame", thresholds: Dict[str, float]) -> 
     )
 
 
+def compute_climate_profile(daily: "DataFrame") -> "DataFrame":
+    """
+    Construit le « profil météo » mensuel par (city, month).
+
+    Indicateurs : normales de température (moyenne / min / max), amplitude
+    thermique moyenne, cumul de précipitations moyen, nombre de jours de pluie
+    et leur proportion, vent moyen, saison et profondeur d'historique.
+    Ce profil est l'analogue météo d'un profil client : il caractérise une
+    ville indépendamment d'un jour donné.
+    """
+    from pyspark.sql import functions as F
+    from pyspark.sql.types import StringType
+
+    season_udf = F.udf(season_of_month, StringType())
+
+    profile = (
+        daily
+        .withColumn("month", F.month("dt"))
+        .withColumn("_is_rain_day", F.when(F.col("precip_sum") > 1.0, 1).otherwise(0))
+        .withColumn("_amplitude", F.col("temp_max") - F.col("temp_min"))
+        .groupBy("city", "month")
+        .agg(
+            F.avg("temp_avg").alias("temp_normal"),
+            F.min("temp_min").alias("temp_min_record"),
+            F.max("temp_max").alias("temp_max_record"),
+            F.avg("_amplitude").alias("temp_amplitude_avg"),
+            F.avg("precip_sum").alias("precip_avg"),
+            F.sum("_is_rain_day").alias("rain_days"),
+            F.avg("wind_avg").alias("wind_avg"),
+            F.countDistinct("dt").alias("n_days"),
+            F.countDistinct(F.year("dt")).alias("n_years"),
+        )
+    )
+
+    return (
+        profile
+        .withColumn("season", season_udf(F.col("month")))
+        .withColumn(
+            "rain_day_ratio",
+            F.when(F.col("n_days") > 0, F.round(F.col("rain_days") / F.col("n_days"), 3))
+            .otherwise(F.lit(0.0)),
+        )
+        .select(
+            "city", "month", "season", "temp_normal", "temp_min_record",
+            "temp_max_record", "temp_amplitude_avg", "precip_avg",
+            "rain_days", "rain_day_ratio", "wind_avg", "n_days", "n_years",
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # Écritures Gold
 # ---------------------------------------------------------------------------
 
+def gold_key(table: str, partition: str) -> str:
+    """Cle de checkpoint d'une partition Gold : ``<table>:<dt>``."""
+    return f"{table}:{partition}"
+
+
 def write_daily_aggregates(daily: "DataFrame") -> None:
     """Écrit daily_aggregates (partition dt) + _SUCCESS par dt et racine."""
+    import checkpoint
     import hdfs_utils
 
     path = f"{hdfs_base()}/gold/meteo/daily_aggregates"
@@ -350,6 +448,7 @@ def write_daily_aggregates(daily: "DataFrame") -> None:
     _write_parquet_dynamic(daily, path, ["dt"])
     for d in dts:
         hdfs_utils.write_success(f"/gold/meteo/daily_aggregates/dt={d}")
+        checkpoint.mark_done(checkpoint.STAGE_GOLD, gold_key("daily_aggregates", d))
     hdfs_utils.write_success("/gold/meteo/daily_aggregates")
     logger.info("daily_aggregates écrit (%d partition(s) dt).", len(dts))
 
@@ -374,6 +473,16 @@ def write_extreme_events(extreme: "DataFrame") -> None:
     logger.info("extreme_events écrit.")
 
 
+def write_climate_profile(profile: "DataFrame") -> None:
+    """Écrit climate_profile (partition month) + _SUCCESS racine."""
+    import hdfs_utils
+
+    path = f"{hdfs_base()}/gold/meteo/climate_profile"
+    _write_parquet_dynamic(profile, path, ["month"])
+    hdfs_utils.write_success("/gold/meteo/climate_profile")
+    logger.info("climate_profile écrit.")
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -393,13 +502,42 @@ def run(args: argparse.Namespace) -> None:
         end = F.lit(args.end_date).cast("date")
         silver = silver.filter((F.col("dt") >= start) & (F.col("dt") <= end))
 
+        if args.only_new:
+            # Ne recalculer que les dt dont daily_aggregates n'est pas deja
+            # marque : sans cela, Gold recalculait TOUT a chaque execution.
+            import checkpoint
+            import hdfs_utils
+
+            all_dts = [r.dt.strftime("%Y-%m-%d")
+                       for r in silver.select("dt").distinct().orderBy("dt").collect()]
+            todo = [d for d in all_dts
+                    if not checkpoint.is_done(checkpoint.STAGE_GOLD,
+                                              gold_key("daily_aggregates", d))
+                    and not hdfs_utils.has_success(f"/gold/meteo/daily_aggregates/dt={d}")]
+            skipped = len(all_dts) - len(todo)
+            if skipped:
+                logger.info("Gold --only-new : %d partition(s) deja calculee(s), ignoree(s).",
+                            skipped)
+            if not todo:
+                logger.info("Gold : rien de nouveau a calculer.")
+                return
+            silver = silver.filter(F.col("dt").cast("string").isin(todo))
+
         daily = compute_daily_aggregates(silver)
         # daily est réutilisé pour les trois agrégats : on le met en cache.
         daily.cache()
+        import checkpoint
+
+        run = checkpoint.run_id("gold")
         try:
             write_daily_aggregates(daily)
             write_weekly_trends(compute_weekly_trends(daily))
             write_extreme_events(compute_extreme_events(daily, get_thresholds()))
+            write_climate_profile(compute_climate_profile(daily))
+            checkpoint.record_run(checkpoint.STAGE_GOLD, run, "success", tables=4)
+        except Exception:
+            checkpoint.record_run(checkpoint.STAGE_GOLD, run, "failed")
+            raise
         finally:
             daily.unpersist()
     finally:
@@ -418,6 +556,11 @@ def parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
         "--end-date",
         default=os.environ.get("GOLD_END_DATE", "2025-12-31"),
         help="Borne supérieure du filtre sur dt (YYYY-MM-DD).",
+    )
+    parser.add_argument(
+        "--only-new",
+        action="store_true",
+        help="Ne recalculer que les partitions dt pas encore presentes en Gold.",
     )
     return parser.parse_args(argv)
 

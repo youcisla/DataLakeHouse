@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-dag_bronze_ingest.py : DAG 1, ingestion Bronze (batch NOAA + streaming Open-Meteo)
-===================================================================================
-- Tâche batch : télécharge les CSV NOAA (cible NOAA_TARGET_GB) et les dépose
-  BRUTS dans /bronze/meteo/batch/source=noaa/year=YYYY/month=MM/ avec marqueur
-  _SUCCESS (idempotence : les stations déjà ingérées sont ignorées).
+dag_bronze_ingest.py : DAG 1, ingestion Bronze (archives Météo-France + streaming Open-Meteo)
+==============================================================================================
+- Tâche batch : télécharge les archives quotidiennes Météo-France
+  (meteo.data.gouv.fr, jeu QUOT RR-T-Vent) et les dépose BRUTES dans
+  /bronze/meteo/batch/source=meteofrance/year=YYYY/month=MM/ avec marqueur
+  _SUCCESS (idempotence : les lots déjà ingérés sont ignorés).
 - Tâche streaming : lance le job Spark Structured Streaming Kafka → Bronze
   (durée bornée, checkpoint HDFS → relance sans doublon).
 - Contrôle de quota : si le Bronze dépasse BRONZE_QUOTA_GB, le streaming est
@@ -41,7 +42,7 @@ DEFAULT_ARGS = {
 
 with DAG(
     dag_id="dag_bronze_ingest",
-    description="Ingestion Bronze : batch NOAA + streaming Open-Meteo (Kafka)",
+    description="Ingestion Bronze : archives Météo-France + streaming Open-Meteo (Kafka)",
     default_args=DEFAULT_ARGS,
     schedule_interval="@daily",
     catchup=False,
@@ -67,14 +68,20 @@ with DAG(
     )
 
     t_batch = BashOperator(
-        task_id="ingestion_batch_noaa",
+        task_id="ingestion_batch_meteofrance",
         bash_command=(
-            "python /opt/project/scripts/batch_ingest.py "
-            "--target-gb \"{{ var.value.get('noaa_target_gb', '6.6') }}\" || "
-            "python /opt/project/scripts/batch_ingest.py --synthetic"
+            "python /opt/project/scripts/meteofrance_ingest.py "
+            "--departments {{ var.value.get('mf_departments', '75 69 13 33 59') }} "
+            "--start-year {{ var.value.get('mf_start_year', '2022') }} "
+            "--end-year {{ var.value.get('mf_end_year', '2026') }} || "
+            "python /opt/project/scripts/meteofrance_ingest.py --synthetic "
+            "--departments {{ var.value.get('mf_departments', '75 69 13 33 59') }} "
+            "--start-year {{ var.value.get('mf_start_year', '2022') }} "
+            "--end-year {{ var.value.get('mf_end_year', '2026') }}"
         ),
-        doc_md="Télécharge les CSV NOAA et les dépose en Bronze (idempotent, _SUCCESS). "
-               "Repli automatique sur --synthetic si le réseau est inaccessible.",
+        doc_md="Télécharge les archives quotidiennes Météo-France (meteo.data.gouv.fr) "
+               "et les dépose BRUTES en Bronze (idempotent : _ingested.json + _SUCCESS). "
+               "Repli automatique sur --synthetic si le réseau est filtré.",
     )
 
     t_streaming = SparkSubmitOperator(

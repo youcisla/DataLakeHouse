@@ -1,0 +1,29 @@
+{
+  "model": "XGBRegressor",
+  "target": "target_temp_demain",
+  "features": [
+    "temperature",
+    "humidite",
+    "vent",
+    "precipitation",
+    "temp_hier",
+    "humidite_hier",
+    "moy_mobile_temp_3j"
+  ],
+  "train_rows": 21,
+  "test_rows": 6,
+  "rmse": 1.434815,
+  "mae": 1.221881,
+  "r2": 0.7832,
+  "baseline_yesterday_rmse": 4.607241,
+  "beats_baseline": true,
+  "feature_importance": {
+    "precipitation": 0.47794,
+    "vent": 0.256287,
+    "humidite": 0.163131,
+    "temp_hier": 0.042912,
+    "temperature": 0.031858,
+    "humidite_hier": 0.023263,
+    "moy_mobile_temp_3j": 0.004609
+  }
+}
