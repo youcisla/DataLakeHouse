@@ -68,6 +68,13 @@ def _concat(frames: List[pd.DataFrame]) -> pd.DataFrame:
     return pd.concat(non_empty, ignore_index=True) if non_empty else pd.DataFrame()
 
 
+def _slice_dt(df: pd.DataFrame, dt_value: str) -> pd.DataFrame:
+    """Filtre un DataFrame sur la colonne dt, tolérant aux DataFrames vides."""
+    if df is None or df.empty or "dt" not in df.columns:
+        return pd.DataFrame()
+    return df[df["dt"].astype(str) == dt_value]
+
+
 # ---------------------------------------------------------------------------
 # Construction du prompt / bulletin
 # ---------------------------------------------------------------------------
@@ -248,15 +255,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         logger.info("Bulletin déjà généré pour %s (utilisez --force pour régénérer).", date)
         return 0
 
+    year = date[:4]
     with tempfile.TemporaryDirectory() as tmpdir:
-        daily = _concat([
-            download_parquet_dir(f"/gold/meteo/daily_aggregates/dt={date}", os.path.join(tmpdir, "daily_j")),
-            download_parquet_dir(f"/gold/meteo/daily_aggregates/dt={prev_date}", os.path.join(tmpdir, "daily_j1")),
-        ])
-        events = _concat([
-            download_parquet_dir(f"/gold/meteo/extreme_events/dt={date}", os.path.join(tmpdir, "events_j")),
-            download_parquet_dir(f"/gold/meteo/extreme_events/dt={prev_date}", os.path.join(tmpdir, "events_j1")),
-        ])
+        # daily_aggregates / extreme_events sont partitionnées par year= (et non
+        # plus par dt=) : on télécharge l'année puis on filtre les 2 jours cibles.
+        daily_year = download_parquet_dir(
+            f"/gold/meteo/daily_aggregates/year={year}", os.path.join(tmpdir, "daily_year"))
+        daily = _concat([_slice_dt(daily_year, date), _slice_dt(daily_year, prev_date)])
+        events_year = download_parquet_dir(
+            f"/gold/meteo/extreme_events/year={year}", os.path.join(tmpdir, "events_year"))
+        events = _concat([_slice_dt(events_year, date), _slice_dt(events_year, prev_date)])
         preds = download_parquet_dir(f"/gold/meteo/ml_predictions/dt={date}", os.path.join(tmpdir, "preds_j"))
 
         prompt = _build_prompt(daily, events, preds)
