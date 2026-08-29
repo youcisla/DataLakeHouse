@@ -28,7 +28,7 @@ export default function FranceMap({ points, selected, onSelect }: {
       trigger: "item", backgroundColor: c.tooltip, borderColor: c.border,
       textStyle: { color: c.text, fontSize: 12 },
       formatter: (p: any) => p.name + " · " +
-        (p.value[2] === null ? "–" : p.value[2].toFixed(1) + " °C"),
+        (p.value[2] === null ? "∅" : p.value[2].toFixed(1) + " °C"),
     },
     geo: {
       map: "france", roam: true, center: [2.4, 46.6], zoom: 1.1, silent: true,

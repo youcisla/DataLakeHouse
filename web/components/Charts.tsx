@@ -51,7 +51,7 @@ export function StationTimeHeatmap({ data, xLabels, stations, unit = "", height 
       formatter: (p: any) => {
         const v = p.value[2];
         return stations[p.value[1]] + " · " + xLabels[p.value[0]] +
-          "<br/><b>" + (v === null ? "–" : v.toFixed(1) + unit) + "</b>" +
+          "<br/><b>" + (v === null ? "∅" : v.toFixed(1) + unit) + "</b>" +
           (valueLabel ? " " + valueLabel : "");
       } },
     xAxis: { type: "category", data: xLabels, axisLine: { lineStyle: { color: c.axis } },
@@ -136,7 +136,7 @@ export function StationLine({ data, unit = " °C", height = 280, color }: {
       formatter: (p: any) => {
         const x = p[0].axisValue;
         const v = p[0].value;
-        return x + "<br/><b>" + (v === null ? "–" : v.toFixed(1) + unit) + "</b>";
+        return x + "<br/><b>" + (v === null ? "∅" : v.toFixed(1) + unit) + "</b>";
       } },
     xAxis: { type: "category", data: data.map((d) => d.label),
       axisLine: { lineStyle: { color: c.axis } }, axisTick: { show: false },

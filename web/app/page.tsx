@@ -158,7 +158,7 @@ export default function Page() {
 
   const archSteps = [
     { badge: "BZ", name: "Bronze", note: "archives Météo-France + flux Open-Meteo" },
-    { badge: "SI", name: "Silver", note: silverStations + " stations · " + (years[0] ?? "–") + "-" + (years[1] ?? "–") },
+    { badge: "SI", name: "Silver", note: silverStations + " stations · " + (years[0] ?? "∅") + "-" + (years[1] ?? "∅") },
     { badge: "GO", name: "Gold", note: totalRows.toLocaleString("fr-FR") + " lignes agrégées" },
     { badge: "ML", name: "Machine Learning", note: "XGBoost · " + predictions.length.toLocaleString("fr-FR") + " prédictions J+1" },
   ];
